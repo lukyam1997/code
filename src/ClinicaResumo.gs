@@ -1,5 +1,5 @@
 /************************************************************
-📊 DASHBOARD EPIDEMIOLÓGICO – Luky + GPT-5 (V12.2.2 – Entrada Setor + Alta por Destino + Fix UI)
+📊 DASHBOARD EPIDEMIOLÓGICO – Luky + GPT-5 (V12.2.3 – Hotfix estabilidade + métricas únicas)
 • Funções em inglês nas fórmulas; separador de argumentos ";"
 • Deduplicação por Prontuário (C) usando a última Data Saída (Q)
 • Abas requeridas:
@@ -24,32 +24,43 @@ function onOpen() {
 
 /* ===== Helper: recriação segura de abas ===== */
 function safeRecreateSheet_(ss, name, fallbackSheet) {
-  const exists = ss.getSheetByName(name);
-  try {
-    if (exists) {
-      if (fallbackSheet && ss.getActiveSheet().getName() === name) {
-        ss.setActiveSheet(fallbackSheet);
-      }
-      ss.deleteSheet(exists);
-      Utilities.sleep(150);
-      SpreadsheetApp.flush();
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const lock = LockService.getDocumentLock();
+    if (!lock.tryLock(5000)) {
+      Utilities.sleep(200 * (attempt + 1));
+      continue;
     }
-  } catch (e) {
-    Utilities.sleep(250);
-    const again = ss.getSheetByName(name);
-    if (again) {
-      if (fallbackSheet && ss.getActiveSheet().getName() === name) {
-        ss.setActiveSheet(fallbackSheet);
+    try {
+      let sheet = ss.getSheetByName(name);
+      if (!sheet) {
+        sheet = ss.insertSheet(name);
+      } else {
+        if (fallbackSheet && ss.getActiveSheet().getName() === name) {
+          ss.setActiveSheet(fallbackSheet);
+        }
+        const fullRange = sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns());
+        fullRange.breakApart();
+        fullRange.clear();
+        const filter = sheet.getFilter();
+        if (filter) filter.remove();
+        sheet.setConditionalFormatRules([]);
+        try {
+          sheet.getCharts().forEach(chart => sheet.removeChart(chart));
+        } catch (e) {}
       }
-      ss.deleteSheet(again);
-      Utilities.sleep(150);
+      Utilities.sleep(120);
       SpreadsheetApp.flush();
+      return sheet;
+    } catch (err) {
+      lastError = err;
+      Utilities.sleep(250 * (attempt + 1));
+    } finally {
+      lock.releaseLock();
     }
   }
-  const created = ss.insertSheet(name);
-  Utilities.sleep(120);
-  SpreadsheetApp.flush();
-  return created;
+  if (lastError) throw lastError;
+  throw new Error('Falha ao recriar aba: ' + name);
 }
 
 /* ===== PRINCIPAL ===== */
@@ -302,7 +313,7 @@ function criarDashboardEpidemiologico() {
   bandTable(`A${row}:C${mTot}`, [3]);
   row = mTot + 2;
 
-  // Blocos simples (dedup) — (⚠️ Troca pedida: Região de Saúde = K, ADS = J)
+    // Blocos simples (dedup)
   function blocoSimples(tituloBloco, colBase, apoioCol, startRow) {
     sh.getRange(startRow, 1, 1, 3).setValues([[tituloBloco, 'Qtd', '%']]).setBackground(COLOR.header).setFontWeight('bold');
     const labels = shApoio.getRange(`${apoioCol}2:${apoioCol}`).getValues().flat().filter(v => v);
@@ -324,8 +335,8 @@ function criarDashboardEpidemiologico() {
   rDemog = blocoSimples('Sexo',                         'E', 'E', rDemog);
   rDemog = blocoSimples('Raça/Cor',                     'H', 'H', rDemog);
   rDemog = blocoSimples('Escolaridade',                 'G', 'G', rDemog);
-  rDemog = blocoSimples('Região de Saúde',              'K', 'K', rDemog); // ✅ corrigido
-  rDemog = blocoSimples('Área Descentralizada de Saúde (ADS)', 'J', 'J', rDemog); // ✅ corrigido
+  rDemog = blocoSimples('Região de Saúde',              'J', 'J', rDemog);
+  rDemog = blocoSimples('Área Descentralizada de Saúde (ADS)', 'K', 'K', rDemog);
 
   // Idade (faixas)
   subHeader(rDemog, 1, 'Idade (faixas etárias)'); rDemog++;
@@ -347,8 +358,8 @@ function criarDashboardEpidemiologico() {
 
   row = rDemog;
 
-  /* 3) Clínicas – Origem (dedup) | Entradas (U e Setor N) | Alta (N filtrada por Destino) | Leito (V) */
-  subHeader(row,1,'3) Clínicas – Origem (dedup) | Entradas | Alta (por destino) | Leito'); row++;
+  /* 3) Clínicas – Origem (dedup) | Entradas (U e Setor N) | Alta (Destino O) | Leito (V) */
+  subHeader(row,1,'3) Clínicas – Origem (dedup) | Entradas | Alta (destino) | Leito'); row++;
 
   function blocoBaseCompletaSimples(tituloBloco, colBase, apoioCol, startRow) {
     sh.getRange(startRow, 1, 1, 3).setValues([[tituloBloco, 'Qtd', '%']]).setBackground(COLOR.header).setFontWeight('bold');
@@ -366,6 +377,37 @@ function criarDashboardEpidemiologico() {
     for (let r=startRow+1; r<=end; r++) sh.getRange(r,3).setFormula(`=IFERROR(B${r}/$B$${total};0)`);
     bandTable(`A${startRow}:C${total}`, [3]);
     return total+2;
+  }
+  function blocoEntradaSetorCompleta(startRow) {
+    const tituloBloco = 'Clínica Entrada (Setor) – base completa';
+    sh.getRange(startRow, 1, 1, 5)
+      .setValues([[tituloBloco, 'Qtd total', '%', 'Qtd únicos', '% únicos']])
+      .setBackground(COLOR.header).setFontWeight('bold');
+    const labels = shApoio.getRange('N2:N').getValues().flat().filter(v => v);
+    if (labels.length === 0) return startRow + 2;
+    sh.getRange(startRow + 1, 1, labels.length, 1).setValues(labels.map(v => [v]));
+    const end = startRow + labels.length;
+    for (let i = 0; i < labels.length; i++) {
+      const r = startRow + 1 + i;
+      sh.getRange(r, 2).setFormula(`=COUNTIFS('Base Filtrada (Fórmula)'!N:N;A${r})`);
+      sh.getRange(r, 4).setFormula(
+        `=IFERROR(COUNTUNIQUE(FILTER('Base Filtrada (Fórmula)'!C:C;'Base Filtrada (Fórmula)'!N:N=A${r}));0)`
+      );
+    }
+    const total = end + 1;
+    sh.getRange(total, 1, 1, 5)
+      .setValues([['TOTAL', '', '', '', '']])
+      .setBackground(COLOR.header).setFontWeight('bold');
+    sh.getRange(total, 2).setFormula(`=SUM(B${startRow + 1}:B${end})`);
+    sh.getRange(total, 4).setFormula("=IFERROR(COUNTUNIQUE(FILTER('Base Filtrada (Fórmula)'!C:C;'Base Filtrada (Fórmula)'!N:N<>\"\"));0)");
+    for (let r = startRow + 1; r <= end; r++) {
+      sh.getRange(r, 3).setFormula(`=IFERROR(B${r}/$B$${total};0)`);
+      sh.getRange(r, 5).setFormula(`=IFERROR(D${r}/$D$${total};0)`);
+    }
+    sh.getRange(total, 3, 1, 1).setValue('');
+    sh.getRange(total, 5, 1, 1).setValue('');
+    bandTable(`A${startRow}:E${total}`, [3,5]);
+    return total + 2;
   }
   function blocoDedupSimples(tituloBloco, colBase, apoioCol, startRow) {
     sh.getRange(startRow, 1, 1, 3).setValues([[tituloBloco, 'Qtd', '%']]).setBackground(COLOR.header).setFontWeight('bold');
@@ -385,26 +427,35 @@ function criarDashboardEpidemiologico() {
     return total+2;
   }
   function blocoAltaPorDestino(tituloBloco, startRow) {
-    // Conta por Setor (N) apenas quando Destino (O) ∈ {"Óbito","Residência","Outro hospital"}
-    sh.getRange(startRow, 1, 1, 3).setValues([[tituloBloco, 'Qtd', '%']]).setBackground(COLOR.header).setFontWeight('bold');
-    const labels = shApoio.getRange("N2:N").getValues().flat().filter(v => v); // usar mesma lista da coluna N (setores)
-    if (labels.length === 0) return startRow + 2;
-    sh.getRange(startRow+1,1,labels.length,1).setValues(labels.map(v=>[v]));
-    const end = startRow + labels.length;
-    for (let i=0;i<labels.length;i++) {
-      const r = startRow+1+i;
-      sh.getRange(r,2).setFormula(
-        `=COUNTIFS('Base Filtrada (Fórmula)'!N:N;A${r};'Base Filtrada (Fórmula)'!O:O;"Óbito")` +
-        `+COUNTIFS('Base Filtrada (Fórmula)'!N:N;A${r};'Base Filtrada (Fórmula)'!O:O;"Residência")` +
-        `+COUNTIFS('Base Filtrada (Fórmula)'!N:N;A${r};'Base Filtrada (Fórmula)'!O:O;"Outro hospital")`
+    const destinos = ['Óbito', 'Residência', 'Outro hospital'];
+    sh.getRange(startRow, 1, 1, 5)
+      .setValues([[tituloBloco, 'Qtd total', '%', 'Qtd únicos', '% únicos']])
+      .setBackground(COLOR.header).setFontWeight('bold');
+    sh.getRange(startRow + 1, 1, destinos.length, 1).setValues(destinos.map(v => [v]));
+    const end = startRow + destinos.length;
+    destinos.forEach((dest, index) => {
+      const r = startRow + 1 + index;
+      sh.getRange(r, 2).setFormula(`=COUNTIFS('Base Filtrada (Fórmula)'!O:O;"${dest}")`);
+      sh.getRange(r, 4).setFormula(
+        `=IFERROR(COUNTUNIQUE(FILTER('Base Filtrada (Fórmula)'!C:C;'Base Filtrada (Fórmula)'!O:O="${dest}"));0)`
       );
+    });
+    const total = end + 1;
+    sh.getRange(total, 1, 1, 5)
+      .setValues([['TOTAL', '', '', '', '']])
+      .setBackground(COLOR.header).setFontWeight('bold');
+    sh.getRange(total, 2).setFormula(`=SUM(B${startRow + 1}:B${end})`);
+    sh.getRange(total, 4).setFormula(
+      "=IFERROR(COUNTUNIQUE(FILTER('Base Filtrada (Fórmula)'!C:C;REGEXMATCH('Base Filtrada (Fórmula)'!O:O;\"^(Óbito|Residência|Outro hospital)$\")));0)"
+    );
+    for (let r = startRow + 1; r <= end; r++) {
+      sh.getRange(r, 3).setFormula(`=IFERROR(B${r}/$B$${total};0)`);
+      sh.getRange(r, 5).setFormula(`=IFERROR(D${r}/$D$${total};0)`);
     }
-    const total = end+1;
-    sh.getRange(total,1,1,3).setValues([['TOTAL','','']]).setBackground(COLOR.header).setFontWeight('bold');
-    sh.getRange(total,2).setFormula(`=SUM(B${startRow+1}:B${end})`);
-    for (let r=startRow+1; r<=end; r++) sh.getRange(r,3).setFormula(`=IFERROR(B${r}/$B$${total};0)`);
-    bandTable(`A${startRow}:C${total}`, [3]);
-    return total+2;
+    sh.getRange(total, 3, 1, 1).setValue('');
+    sh.getRange(total, 5, 1, 1).setValue('');
+    bandTable(`A${startRow}:E${total}`, [3,5]);
+    return total + 2;
   }
 
   let rClin = row;
@@ -414,11 +465,11 @@ function criarDashboardEpidemiologico() {
   // Entradas – Especialidade (U) (base completa, já existia)
   rClin = blocoBaseCompletaSimples('Clínica Entrada (Especialidade) – base completa', 'U', 'U', rClin);
 
-  // NOVO: Entradas – Setor (N) (base completa, sem filtro)
-  rClin = blocoBaseCompletaSimples('Clínica Entrada (Setor) – base completa', 'N', 'N', rClin);
+  // NOVO: Entradas – Setor (N) com totais e únicos
+  rClin = blocoEntradaSetorCompleta(rClin);
 
-  // Alta (Saída) – Setor (N) filtrando Destino (O)
-  rClin = blocoAltaPorDestino('Clínica Alta (Saída) – por Destino (Óbito, Residência, Outro hospital)', rClin);
+  // Alta (Saída) – Destino (O) com totais e únicos
+  rClin = blocoAltaPorDestino('Clínica Alta (Saída) – Destino (Óbito, Residência, Outro hospital)', rClin);
 
   // Leito Equitópico – base completa
   rClin = blocoBaseCompletaSimples('Leito Equitópico – base completa', 'V', 'V', rClin);
@@ -529,5 +580,5 @@ function criarDashboardEpidemiologico() {
   SpreadsheetApp.flush();
   Utilities.sleep(120);
 
-  SpreadsheetApp.getUi().alert('✅ Dashboard (V12.2.2) criado com sucesso! Entrada (Setor N) + Alta por Destino (O) + Região/ADS corrigidos.');
+  SpreadsheetApp.getUi().alert('✅ Dashboard (V12.2.3) criado com sucesso! Lock de estabilidade + métricas únicas em Setor/Destino.');
 }
