@@ -434,7 +434,7 @@ function criarDashboardEpidemiologico() {
     const countFormulas = Array.from({ length: labels.length }, () => [`=COUNTIFS('Base Filtrada (Fórmula)'!N:N;RC1)`]);
     const uniqueFormulas = Array.from(
       { length: labels.length },
-      () => [`=IFERROR(COUNTUNIQUE(FILTER('Base Filtrada (Fórmula)'!C:C;'Base Filtrada (Fórmula)'!N:N=RC1;'Base Filtrada (Fórmula)'!C:C<>""));0)`]
+      () => [`=COUNTIFS(DadosÚnicos!N:N;RC1)`]
     );
     sh.getRange(startRow + 1, 2, labels.length, 1).setFormulasR1C1(countFormulas);
     sh.getRange(startRow + 1, 4, labels.length, 1).setFormulasR1C1(uniqueFormulas);
@@ -442,7 +442,7 @@ function criarDashboardEpidemiologico() {
       .setValues([['TOTAL', '', '', '', '']])
       .setBackground(COLOR.header).setFontWeight('bold');
     sh.getRange(total, 2).setFormula(`=SUM(B${startRow + 1}:B${end})`);
-    sh.getRange(total, 4).setFormula("=IFERROR(COUNTUNIQUE(FILTER('Base Filtrada (Fórmula)'!C:C;'Base Filtrada (Fórmula)'!N:N<>\"\";'Base Filtrada (Fórmula)'!C:C<>\"\"));0)");
+    sh.getRange(total, 4).setFormula(`=SUM(D${startRow + 1}:D${end})`);
     const pctTotal = Array.from({ length: labels.length }, () => [`=IFERROR(RC[-1]/R${total}C2;0)`]);
     const pctUnique = Array.from({ length: labels.length }, () => [`=IFERROR(RC[-1]/R${total}C4;0)`]);
     sh.getRange(startRow + 1, 3, labels.length, 1).setFormulasR1C1(pctTotal);
@@ -474,8 +474,9 @@ function criarDashboardEpidemiologico() {
     const uniqueFormulas = Array.from(
       { length: labels.length },
       () => [
-        "=IFERROR(COUNTUNIQUE(FILTER('Base Filtrada (Fórmula)'!C:C;'Base Filtrada (Fórmula)'!N:N=RC1;'Base Filtrada (Fórmula)'!C:C<>\"\";" +
-          "REGEXMATCH('Base Filtrada (Fórmula)'!O:O;\"^(Óbito|Residência|Outro hospital)$\")));0)"
+        "=COUNTIFS(DadosÚnicos!N:N;RC1;DadosÚnicos!O:O;\"Óbito\")" +
+        "+COUNTIFS(DadosÚnicos!N:N;RC1;DadosÚnicos!O:O;\"Residência\")" +
+        "+COUNTIFS(DadosÚnicos!N:N;RC1;DadosÚnicos!O:O;\"Outro hospital\")"
       ]
     );
     sh.getRange(startRow + 1, 2, labels.length, 1).setFormulasR1C1(countFormulas);
@@ -485,10 +486,7 @@ function criarDashboardEpidemiologico() {
       .setBackground(COLOR.header)
       .setFontWeight('bold');
     sh.getRange(total, 2).setFormula(`=SUM(B${startRow + 1}:B${end})`);
-    sh.getRange(total, 4).setFormula(
-      "=IFERROR(COUNTUNIQUE(FILTER('Base Filtrada (Fórmula)'!C:C;'Base Filtrada (Fórmula)'!N:N<>\"\";'Base Filtrada (Fórmula)'!C:C<>\"\";" +
-        "REGEXMATCH('Base Filtrada (Fórmula)'!O:O;\"^(Óbito|Residência|Outro hospital)$\")));0)"
-    );
+    sh.getRange(total, 4).setFormula(`=SUM(D${startRow + 1}:D${end})`);
     const pctTotal = Array.from({ length: labels.length }, () => [`=IFERROR(RC[-1]/R${total}C2;0)`]);
     const pctUnique = Array.from({ length: labels.length }, () => [`=IFERROR(RC[-1]/R${total}C4;0)`]);
     sh.getRange(startRow + 1, 3, labels.length, 1).setFormulasR1C1(pctTotal);
@@ -529,16 +527,14 @@ function criarDashboardEpidemiologico() {
     const end = startRow + destinos.length;
     const total = end + 1;
     const countFormulas = destinos.map(() => [`=COUNTIFS('Base Filtrada (Fórmula)'!O:O;RC1)`]);
-    const uniqueFormulas = destinos.map(() => [`=IFERROR(COUNTUNIQUE(FILTER('Base Filtrada (Fórmula)'!C:C;'Base Filtrada (Fórmula)'!O:O=RC1;'Base Filtrada (Fórmula)'!C:C<>""));0)`]);
+    const uniqueFormulas = destinos.map(() => [`=COUNTIFS(DadosÚnicos!O:O;RC1)`]);
     sh.getRange(startRow + 1, 2, destinos.length, 1).setFormulasR1C1(countFormulas);
     sh.getRange(startRow + 1, 4, destinos.length, 1).setFormulasR1C1(uniqueFormulas);
     sh.getRange(total, 1, 1, 5)
       .setValues([['TOTAL', '', '', '', '']])
       .setBackground(COLOR.header).setFontWeight('bold');
     sh.getRange(total, 2).setFormula(`=SUM(B${startRow + 1}:B${end})`);
-    sh.getRange(total, 4).setFormula(
-      "=IFERROR(COUNTUNIQUE(FILTER('Base Filtrada (Fórmula)'!C:C;'Base Filtrada (Fórmula)'!C:C<>\"\";REGEXMATCH('Base Filtrada (Fórmula)'!O:O;\"^(Óbito|Residência|Outro hospital)$\")));0)"
-    );
+    sh.getRange(total, 4).setFormula(`=SUM(D${startRow + 1}:D${end})`);
     const pctTotal = Array.from({ length: destinos.length }, () => [`=IFERROR(RC[-1]/R${total}C2;0)`]);
     const pctUnique = Array.from({ length: destinos.length }, () => [`=IFERROR(RC[-1]/R${total}C4;0)`]);
     sh.getRange(startRow + 1, 3, destinos.length, 1).setFormulasR1C1(pctTotal);
