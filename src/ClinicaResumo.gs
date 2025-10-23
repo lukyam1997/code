@@ -63,6 +63,18 @@ function safeRecreateSheet_(ss, name, fallbackSheet) {
   throw new Error('Falha ao recriar aba: ' + name);
 }
 
+function getColumnValues_(sheet, rangeA1) {
+  return sheet
+    .getRange(rangeA1)
+    .getValues()
+    .flat()
+    .filter(value => value !== '' && value !== null);
+}
+
+function escapeFormulaString_(value) {
+  return value.toString().replace(/"/g, '""');
+}
+
 /* ===== PRINCIPAL ===== */
 function criarDashboardEpidemiologico() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -167,10 +179,12 @@ function criarDashboardEpidemiologico() {
   function bandTable(rangeA1, pctCols=[]) {
     const rg = sh.getRange(rangeA1);
     const rows = rg.getNumRows(), cols = rg.getNumColumns();
-    for (let i = 1; i <= rows; i++) {
-      rg.getCell(i,1).offset(0,0,1,cols).setBackground(i % 2 === 0 ? COLOR.bandB : COLOR.bandA);
-    }
-    rg.setBorder(true,true,true,true,true,true).setVerticalAlignment('middle');
+    const backgrounds = Array.from({ length: rows }, (_, idx) =>
+      Array(cols).fill(idx % 2 === 0 ? COLOR.bandA : COLOR.bandB)
+    );
+    rg.setBackgrounds(backgrounds)
+      .setBorder(true,true,true,true,true,true)
+      .setVerticalAlignment('middle');
     pctCols.forEach(idx => {
       if (rows > 1) sh.getRange(rg.getRow()+1, rg.getColumn()+idx-1, rows-1, 1).setNumberFormat('0.0%');
     });
@@ -239,26 +253,33 @@ function criarDashboardEpidemiologico() {
 
   // Procedência agrupada (conta em DadosÚnicos!L:L)
   sh.getRange(row,1,1,3).setValues([['Categoria','Qtd','%']]).setBackground(COLOR.header).setFontWeight('bold');
-  const gruposProc = {
-    Hospital:      shMuni.getRange('G2:G').getValues().flat().filter(v => v),
-    UPA:           shMuni.getRange('H2:H').getValues().flat().filter(v => v),
-    'Ambulatório': shMuni.getRange('I2:I').getValues().flat().filter(v => v),
-    Residência:    shMuni.getRange('J2:J').getValues().flat().filter(v => v),
-    CRESUS:        shMuni.getRange('K2:K').getValues().flat().filter(v => v),
-  };
-  const startProc = row+1;
-  let idxProc = 0;
-  for (const [nome, lista] of Object.entries(gruposProc)) {
-    const r = startProc + idxProc;
-    sh.getRange(r, 1).setValue(nome);
-    const cond = lista.map(v => `(DadosÚnicos!L:L="${v}")`).join('+');
-    sh.getRange(r, 2).setFormula(cond ? `=ARRAYFORMULA(SUM(--(${cond})))` : '=0');
-    idxProc++;
+  const gruposProc = [
+    ['Hospital', getColumnValues_(shMuni, 'G2:G')],
+    ['UPA', getColumnValues_(shMuni, 'H2:H')],
+    ['Ambulatório', getColumnValues_(shMuni, 'I2:I')],
+    ['Residência', getColumnValues_(shMuni, 'J2:J')],
+    ['CRESUS', getColumnValues_(shMuni, 'K2:K')],
+  ];
+  const startProc = row + 1;
+  if (gruposProc.length) {
+    sh.getRange(startProc, 1, gruposProc.length, 1)
+      .setValues(gruposProc.map(([nome]) => [nome]));
+    const procFormulas = gruposProc.map(([, lista]) => {
+      if (!lista.length) return ['=0'];
+      const cond = lista
+        .map(v => `(DadosÚnicos!L:L="${escapeFormulaString_(v)}")`)
+        .join('+');
+      return [`=ARRAYFORMULA(SUM(--(${cond})))`];
+    });
+    sh.getRange(startProc, 2, gruposProc.length, 1).setFormulas(procFormulas);
   }
-  const totalProc = startProc + idxProc;
+  const totalProc = startProc + gruposProc.length;
   sh.getRange(totalProc, 1, 1, 3).setValues([['TOTAL','','']]).setBackground(COLOR.header).setFontWeight('bold');
-  sh.getRange(totalProc, 2).setFormula(`=SUM(B${startProc}:B${totalProc - 1})`);
-  for (let r = startProc; r < totalProc; r++) sh.getRange(r, 3).setFormula(`=IFERROR(B${r}/$B$${totalProc};0)`);
+  sh.getRange(totalProc, 2).setFormula(gruposProc.length ? `=SUM(B${startProc}:B${totalProc - 1})` : '=0');
+  if (gruposProc.length) {
+    const pctFormulas = Array.from({ length: gruposProc.length }, () => [`=IFERROR(RC[-1]/R${totalProc}C2;0)`]);
+    sh.getRange(startProc, 3, gruposProc.length, 1).setFormulasR1C1(pctFormulas);
+  }
   bandTable(`A${row}:C${totalProc}`, [3]);
 
   // Gráfico de rosquinha – Procedência
@@ -290,46 +311,60 @@ function criarDashboardEpidemiologico() {
 
   // Município agrupado (Fortaleza / RMF / Interior)
   sh.getRange(row,1,1,3).setValues([['Município (agrupado)','Qtd','%']]).setBackground(COLOR.header).setFontWeight('bold');
-  const nomes = shMuni.getRange('A2:A').getValues().flat().filter(v => v);
-  const capital = shMuni.getRange('B2:B').getValues().flat();
-  const rmf     = shMuni.getRange('C2:C').getValues().flat();
-  let fortaleza=[], metro=[], interior=[];
-  nomes.forEach((m, i) => { if (capital[i] === 'Sim') fortaleza.push(m); else if (rmf[i] === 'Sim') metro.push(m); else interior.push(m); });
+  const muniData = shMuni.getRange(2, 1, Math.max(shMuni.getLastRow() - 1, 0), 3).getValues();
+  const fortaleza = [];
+  const metro = [];
+  const interior = [];
+  muniData.forEach(([nome, isCapital, isRmf]) => {
+    if (!nome) return;
+    if (isCapital === 'Sim') fortaleza.push(nome);
+    else if (isRmf === 'Sim') metro.push(nome);
+    else interior.push(nome);
+  });
   const mStart = row+1;
   const gruposM = [['Fortaleza', fortaleza], ['RMF', metro], ['Interior', interior]];
-  gruposM.forEach(([label, lista], i) => {
-    const r = mStart + i;
-    sh.getRange(r, 1).setValue(label);
-    const cond = lista.map(v => `(DadosÚnicos!I:I="${v}")`).join('+');
-    sh.getRange(r, 2).setFormula(cond ? `=ARRAYFORMULA(SUM(--(${cond})))` : '=0');
+  sh.getRange(mStart, 1, gruposM.length, 1).setValues(gruposM.map(([label]) => [label]));
+  const gruposFormulas = gruposM.map(([, lista]) => {
+    if (!lista.length) return ['=0'];
+    const cond = lista
+      .map(v => `(DadosÚnicos!I:I="${escapeFormulaString_(v)}")`)
+      .join('+');
+    return [`=ARRAYFORMULA(SUM(--(${cond})))`];
   });
+  sh.getRange(mStart, 2, gruposFormulas.length, 1).setFormulas(gruposFormulas);
   const rOutros = mStart + gruposM.length;
   sh.getRange(rOutros, 1).setValue('Outros');
   sh.getRange(rOutros, 2).setFormula(`=MAX(0;COUNTA(DadosÚnicos!I2:I)-SUM(B${mStart}:B${rOutros - 1}))`);
   const mTot = rOutros + 1;
   sh.getRange(mTot, 1, 1, 3).setValues([['TOTAL','','']]).setBackground(COLOR.header).setFontWeight('bold');
   sh.getRange(mTot, 2).setFormula(`=SUM(B${mStart}:B${rOutros})`);
-  for (let r = mStart; r <= rOutros; r++) sh.getRange(r, 3).setFormula(`=IFERROR(B${r}/$B$${mTot};0)`);
+  sh.getRange(mStart, 3, rOutros - mStart + 1, 1)
+    .setFormulasR1C1(Array.from({ length: rOutros - mStart + 1 }, () => [`=IFERROR(RC[-1]/R${mTot}C2;0)`]));
   bandTable(`A${row}:C${mTot}`, [3]);
   row = mTot + 2;
 
     // Blocos simples (dedup)
   function blocoSimples(tituloBloco, colBase, apoioCol, startRow) {
-    sh.getRange(startRow, 1, 1, 3).setValues([[tituloBloco, 'Qtd', '%']]).setBackground(COLOR.header).setFontWeight('bold');
-    const labels = shApoio.getRange(`${apoioCol}2:${apoioCol}`).getValues().flat().filter(v => v);
+    sh.getRange(startRow, 1, 1, 3)
+      .setValues([[tituloBloco, 'Qtd', '%']])
+      .setBackground(COLOR.header)
+      .setFontWeight('bold');
+    const labels = getColumnValues_(shApoio, `${apoioCol}2:${apoioCol}`);
     if (labels.length === 0) return startRow + 2;
-    sh.getRange(startRow+1,1,labels.length,1).setValues(labels.map(v=>[v]));
+    sh.getRange(startRow + 1, 1, labels.length, 1).setValues(labels.map(v => [v]));
     const end = startRow + labels.length;
-    for (let i=0;i<labels.length;i++) {
-      const r = startRow+1+i;
-      sh.getRange(r, 2).setFormula(`=COUNTIFS(DadosÚnicos!${colBase}:${colBase};A${r})`);
-    }
-    const total = end+1;
-    sh.getRange(total,1,1,3).setValues([['TOTAL','','']]).setBackground(COLOR.header).setFontWeight('bold');
-    sh.getRange(total, 2).setFormula(`=SUM(B${startRow+1}:B${end})`);
-    for (let r=startRow+1; r<=end; r++) sh.getRange(r, 3).setFormula(`=IFERROR(B${r}/$B$${total};0)`);
+    const total = end + 1;
+    const countFormulas = Array.from({ length: labels.length }, () => [`=COUNTIFS(DadosÚnicos!${colBase}:${colBase};RC1)`]);
+    sh.getRange(startRow + 1, 2, labels.length, 1).setFormulasR1C1(countFormulas);
+    sh.getRange(total, 1, 1, 3)
+      .setValues([['TOTAL', '', '']])
+      .setBackground(COLOR.header)
+      .setFontWeight('bold');
+    sh.getRange(total, 2).setFormula(`=SUM(B${startRow + 1}:B${end})`);
+    sh.getRange(startRow + 1, 3, labels.length, 1)
+      .setFormulasR1C1(Array.from({ length: labels.length }, () => [`=IFERROR(RC[-1]/R${total}C2;0)`]));
     bandTable(`A${startRow}:C${total}`, [3]);
-    return total+2;
+    return total + 2;
   }
   let rDemog = row;
   rDemog = blocoSimples('Sexo',                         'E', 'E', rDemog);
@@ -343,13 +378,16 @@ function criarDashboardEpidemiologico() {
   sh.getRange(rDemog,1,1,3).setValues([['Faixa','Qtd','%']]).setBackground(COLOR.header).setFontWeight('bold');
   const fStart = rDemog+1;
   sh.getRange(fStart,1,3,1).setValues([['≤ 19 anos'],['20 a 59 anos'],['≥ 60 anos']]);
-  sh.getRange(fStart,2).setFormula("=COUNTIFS(DadosÚnicos!F:F;\"<=19\")");
-  sh.getRange(fStart+1,2).setFormula("=COUNTIFS(DadosÚnicos!F:F;\">=20\";DadosÚnicos!F:F;\"<=59\")");
-  sh.getRange(fStart+2,2).setFormula("=COUNTIFS(DadosÚnicos!F:F;\">=60\")");
+  sh.getRange(fStart, 2, 3, 1).setFormulas([
+    ['=COUNTIFS(DadosÚnicos!F:F;"<=19")'],
+    ['=COUNTIFS(DadosÚnicos!F:F;">=20";DadosÚnicos!F:F;"<=59")'],
+    ['=COUNTIFS(DadosÚnicos!F:F;">=60")'],
+  ]);
   const fTot = fStart+3;
   sh.getRange(fTot,1,1,3).setValues([['TOTAL','','']]).setBackground(COLOR.header).setFontWeight('bold');
   sh.getRange(fTot,2).setFormula(`=SUM(B${fStart}:B${fStart+2})`);
-  for (let r=fStart; r<=fStart+2; r++) sh.getRange(r,3).setFormula(`=IFERROR(B${r}/$B$${fTot};0)`);
+  sh.getRange(fStart, 3, 3, 1)
+    .setFormulasR1C1(Array.from({ length: 3 }, () => [`=IFERROR(RC[-1]/R${fTot}C2;0)`]));
   bandTable(`A${rDemog}:C${fTot}`, [3]);
 
   rDemog = fTot + 2;
@@ -362,69 +400,79 @@ function criarDashboardEpidemiologico() {
   subHeader(row,1,'3) Clínicas – Origem (dedup) | Entradas | Alta (destino) | Leito'); row++;
 
   function blocoBaseCompletaSimples(tituloBloco, colBase, apoioCol, startRow) {
-    sh.getRange(startRow, 1, 1, 3).setValues([[tituloBloco, 'Qtd', '%']]).setBackground(COLOR.header).setFontWeight('bold');
-    const labels = shApoio.getRange(`${apoioCol}2:${apoioCol}`).getValues().flat().filter(v => v);
+    sh.getRange(startRow, 1, 1, 3)
+      .setValues([[tituloBloco, 'Qtd', '%']])
+      .setBackground(COLOR.header)
+      .setFontWeight('bold');
+    const labels = getColumnValues_(shApoio, `${apoioCol}2:${apoioCol}`);
     if (labels.length === 0) return startRow + 2;
-    sh.getRange(startRow+1,1,labels.length,1).setValues(labels.map(v=>[v]));
+    sh.getRange(startRow + 1, 1, labels.length, 1).setValues(labels.map(v => [v]));
     const end = startRow + labels.length;
-    for (let i=0;i<labels.length;i++) {
-      const r = startRow+1+i;
-      sh.getRange(r,2).setFormula(`=COUNTIFS('Base Filtrada (Fórmula)'!${colBase}:${colBase};A${r})`);
-    }
-    const total = end+1;
-    sh.getRange(total,1,1,3).setValues([['TOTAL','','']]).setBackground(COLOR.header).setFontWeight('bold');
-    sh.getRange(total,2).setFormula(`=SUM(B${startRow+1}:B${end})`);
-    for (let r=startRow+1; r<=end; r++) sh.getRange(r,3).setFormula(`=IFERROR(B${r}/$B$${total};0)`);
+    const total = end + 1;
+    const countFormulas = Array.from({ length: labels.length }, () => [`=COUNTIFS('Base Filtrada (Fórmula)'!${colBase}:${colBase};RC1)`]);
+    sh.getRange(startRow + 1, 2, labels.length, 1).setFormulasR1C1(countFormulas);
+    sh.getRange(total, 1, 1, 3)
+      .setValues([['TOTAL', '', '']])
+      .setBackground(COLOR.header)
+      .setFontWeight('bold');
+    sh.getRange(total, 2).setFormula(`=SUM(B${startRow + 1}:B${end})`);
+    sh.getRange(startRow + 1, 3, labels.length, 1)
+      .setFormulasR1C1(Array.from({ length: labels.length }, () => [`=IFERROR(RC[-1]/R${total}C2;0)`]));
     bandTable(`A${startRow}:C${total}`, [3]);
-    return total+2;
+    return total + 2;
   }
   function blocoEntradaSetorCompleta(startRow) {
     const tituloBloco = 'Clínica Entrada (Setor) – base completa';
     sh.getRange(startRow, 1, 1, 5)
       .setValues([[tituloBloco, 'Qtd total', '%', 'Qtd únicos', '% únicos']])
       .setBackground(COLOR.header).setFontWeight('bold');
-    const labels = shApoio.getRange('N2:N').getValues().flat().filter(v => v);
+    const labels = getColumnValues_(shApoio, 'N2:N');
     if (labels.length === 0) return startRow + 2;
     sh.getRange(startRow + 1, 1, labels.length, 1).setValues(labels.map(v => [v]));
     const end = startRow + labels.length;
-    for (let i = 0; i < labels.length; i++) {
-      const r = startRow + 1 + i;
-      sh.getRange(r, 2).setFormula(`=COUNTIFS('Base Filtrada (Fórmula)'!N:N;A${r})`);
-      sh.getRange(r, 4).setFormula(
-        `=IFERROR(COUNTUNIQUE(FILTER('Base Filtrada (Fórmula)'!C:C;'Base Filtrada (Fórmula)'!N:N=A${r}));0)`
-      );
-    }
     const total = end + 1;
+    const countFormulas = Array.from({ length: labels.length }, () => [`=COUNTIFS('Base Filtrada (Fórmula)'!N:N;RC1)`]);
+    const uniqueFormulas = Array.from(
+      { length: labels.length },
+      () => [`=IFERROR(COUNTUNIQUE(FILTER('Base Filtrada (Fórmula)'!C:C;'Base Filtrada (Fórmula)'!N:N=RC1));0)`]
+    );
+    sh.getRange(startRow + 1, 2, labels.length, 1).setFormulasR1C1(countFormulas);
+    sh.getRange(startRow + 1, 4, labels.length, 1).setFormulasR1C1(uniqueFormulas);
     sh.getRange(total, 1, 1, 5)
       .setValues([['TOTAL', '', '', '', '']])
       .setBackground(COLOR.header).setFontWeight('bold');
     sh.getRange(total, 2).setFormula(`=SUM(B${startRow + 1}:B${end})`);
     sh.getRange(total, 4).setFormula("=IFERROR(COUNTUNIQUE(FILTER('Base Filtrada (Fórmula)'!C:C;'Base Filtrada (Fórmula)'!N:N<>\"\"));0)");
-    for (let r = startRow + 1; r <= end; r++) {
-      sh.getRange(r, 3).setFormula(`=IFERROR(B${r}/$B$${total};0)`);
-      sh.getRange(r, 5).setFormula(`=IFERROR(D${r}/$D$${total};0)`);
-    }
+    const pctTotal = Array.from({ length: labels.length }, () => [`=IFERROR(RC[-1]/R${total}C2;0)`]);
+    const pctUnique = Array.from({ length: labels.length }, () => [`=IFERROR(RC[-1]/R${total}C4;0)`]);
+    sh.getRange(startRow + 1, 3, labels.length, 1).setFormulasR1C1(pctTotal);
+    sh.getRange(startRow + 1, 5, labels.length, 1).setFormulasR1C1(pctUnique);
     sh.getRange(total, 3, 1, 1).setValue('');
     sh.getRange(total, 5, 1, 1).setValue('');
     bandTable(`A${startRow}:E${total}`, [3,5]);
     return total + 2;
   }
   function blocoDedupSimples(tituloBloco, colBase, apoioCol, startRow) {
-    sh.getRange(startRow, 1, 1, 3).setValues([[tituloBloco, 'Qtd', '%']]).setBackground(COLOR.header).setFontWeight('bold');
-    const labels = shApoio.getRange(`${apoioCol}2:${apoioCol}`).getValues().flat().filter(v => v);
+    sh.getRange(startRow, 1, 1, 3)
+      .setValues([[tituloBloco, 'Qtd', '%']])
+      .setBackground(COLOR.header)
+      .setFontWeight('bold');
+    const labels = getColumnValues_(shApoio, `${apoioCol}2:${apoioCol}`);
     if (labels.length === 0) return startRow + 2;
-    sh.getRange(startRow+1,1,labels.length,1).setValues(labels.map(v=>[v]));
+    sh.getRange(startRow + 1, 1, labels.length, 1).setValues(labels.map(v => [v]));
     const end = startRow + labels.length;
-    for (let i=0;i<labels.length;i++) {
-      const r = startRow+1+i;
-      sh.getRange(r,2).setFormula(`=COUNTIFS(DadosÚnicos!${colBase}:${colBase};A${r})`);
-    }
-    const total = end+1;
-    sh.getRange(total,1,1,3).setValues([['TOTAL','','']]).setBackground(COLOR.header).setFontWeight('bold');
-    sh.getRange(total,2).setFormula(`=SUM(B${startRow+1}:B${end})`);
-    for (let r=startRow+1; r<=end; r++) sh.getRange(r,3).setFormula(`=IFERROR(B${r}/$B$${total};0)`);
+    const total = end + 1;
+    const countFormulas = Array.from({ length: labels.length }, () => [`=COUNTIFS(DadosÚnicos!${colBase}:${colBase};RC1)`]);
+    sh.getRange(startRow + 1, 2, labels.length, 1).setFormulasR1C1(countFormulas);
+    sh.getRange(total, 1, 1, 3)
+      .setValues([['TOTAL', '', '']])
+      .setBackground(COLOR.header)
+      .setFontWeight('bold');
+    sh.getRange(total, 2).setFormula(`=SUM(B${startRow + 1}:B${end})`);
+    sh.getRange(startRow + 1, 3, labels.length, 1)
+      .setFormulasR1C1(Array.from({ length: labels.length }, () => [`=IFERROR(RC[-1]/R${total}C2;0)`]));
     bandTable(`A${startRow}:C${total}`, [3]);
-    return total+2;
+    return total + 2;
   }
   function blocoAltaPorDestino(tituloBloco, startRow) {
     const destinos = ['Óbito', 'Residência', 'Outro hospital'];
@@ -433,14 +481,11 @@ function criarDashboardEpidemiologico() {
       .setBackground(COLOR.header).setFontWeight('bold');
     sh.getRange(startRow + 1, 1, destinos.length, 1).setValues(destinos.map(v => [v]));
     const end = startRow + destinos.length;
-    destinos.forEach((dest, index) => {
-      const r = startRow + 1 + index;
-      sh.getRange(r, 2).setFormula(`=COUNTIFS('Base Filtrada (Fórmula)'!O:O;"${dest}")`);
-      sh.getRange(r, 4).setFormula(
-        `=IFERROR(COUNTUNIQUE(FILTER('Base Filtrada (Fórmula)'!C:C;'Base Filtrada (Fórmula)'!O:O="${dest}"));0)`
-      );
-    });
     const total = end + 1;
+    const countFormulas = destinos.map(() => [`=COUNTIFS('Base Filtrada (Fórmula)'!O:O;RC1)`]);
+    const uniqueFormulas = destinos.map(() => [`=IFERROR(COUNTUNIQUE(FILTER('Base Filtrada (Fórmula)'!C:C;'Base Filtrada (Fórmula)'!O:O=RC1));0)`]);
+    sh.getRange(startRow + 1, 2, destinos.length, 1).setFormulasR1C1(countFormulas);
+    sh.getRange(startRow + 1, 4, destinos.length, 1).setFormulasR1C1(uniqueFormulas);
     sh.getRange(total, 1, 1, 5)
       .setValues([['TOTAL', '', '', '', '']])
       .setBackground(COLOR.header).setFontWeight('bold');
@@ -448,10 +493,10 @@ function criarDashboardEpidemiologico() {
     sh.getRange(total, 4).setFormula(
       "=IFERROR(COUNTUNIQUE(FILTER('Base Filtrada (Fórmula)'!C:C;REGEXMATCH('Base Filtrada (Fórmula)'!O:O;\"^(Óbito|Residência|Outro hospital)$\")));0)"
     );
-    for (let r = startRow + 1; r <= end; r++) {
-      sh.getRange(r, 3).setFormula(`=IFERROR(B${r}/$B$${total};0)`);
-      sh.getRange(r, 5).setFormula(`=IFERROR(D${r}/$D$${total};0)`);
-    }
+    const pctTotal = Array.from({ length: destinos.length }, () => [`=IFERROR(RC[-1]/R${total}C2;0)`]);
+    const pctUnique = Array.from({ length: destinos.length }, () => [`=IFERROR(RC[-1]/R${total}C4;0)`]);
+    sh.getRange(startRow + 1, 3, destinos.length, 1).setFormulasR1C1(pctTotal);
+    sh.getRange(startRow + 1, 5, destinos.length, 1).setFormulasR1C1(pctUnique);
     sh.getRange(total, 3, 1, 1).setValue('');
     sh.getRange(total, 5, 1, 1).setValue('');
     bandTable(`A${startRow}:E${total}`, [3,5]);
@@ -548,12 +593,18 @@ function criarDashboardEpidemiologico() {
   const espStart = row+1;
   if (especialidades.length > 0) {
     sh.getRange(espStart,1,especialidades.length,1).setValues(especialidades.map(v=>[v]));
-    for (let i=0;i<especialidades.length;i++) {
-      const r = espStart+i;
-      sh.getRange(r,2).setFormula(`=COUNTIFS(DadosÚnicos!U:U;A${r})`);
-      sh.getRange(r,3).setFormula(`=IFERROR(AVERAGE(FILTER(DadosÚnicos!R:R;DadosÚnicos!U:U=A${r}));0)`);
-      sh.getRange(r,4).setFormula(`=IFERROR(COUNTIFS(DadosÚnicos!U:U;A${r};DadosÚnicos!O:O;"Óbito")/COUNTIFS(DadosÚnicos!U:U;A${r});0)`);
-    }
+    const countFormulas = Array.from({ length: especialidades.length }, () => [`=COUNTIFS(DadosÚnicos!U:U;RC1)`]);
+    const avgFormulas = Array.from(
+      { length: especialidades.length },
+      () => [`=IFERROR(AVERAGE(FILTER(DadosÚnicos!R:R;DadosÚnicos!U:U=RC1));0)`]
+    );
+    const deathFormulas = Array.from(
+      { length: especialidades.length },
+      () => [`=IFERROR(COUNTIFS(DadosÚnicos!U:U;RC1;DadosÚnicos!O:O;"Óbito")/COUNTIFS(DadosÚnicos!U:U;RC1);0)`]
+    );
+    sh.getRange(espStart, 2, especialidades.length, 1).setFormulasR1C1(countFormulas);
+    sh.getRange(espStart, 3, especialidades.length, 1).setFormulasR1C1(avgFormulas);
+    sh.getRange(espStart, 4, especialidades.length, 1).setFormulasR1C1(deathFormulas);
     const espEnd = espStart + especialidades.length - 1;
     sh.getRange(espStart,3,especialidades.length,1).setNumberFormat('0.00');
     sh.getRange(espStart,4,especialidades.length,1).setNumberFormat('0.0%');
