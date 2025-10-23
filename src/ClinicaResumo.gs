@@ -452,6 +452,52 @@ function criarDashboardEpidemiologico() {
     bandTable(`A${startRow}:E${total}`, [3,5]);
     return total + 2;
   }
+  function blocoSaidaSetorCompleta(startRow) {
+    const tituloBloco = 'Clínica Saídas (Setor) – base completa + únicos';
+    sh.getRange(startRow, 1, 1, 5)
+      .setValues([[tituloBloco, 'Qtd total', '%', 'Qtd únicos', '% únicos']])
+      .setBackground(COLOR.header)
+      .setFontWeight('bold');
+    const labels = getColumnValues_(shApoio, 'N2:N');
+    if (labels.length === 0) return startRow + 2;
+    sh.getRange(startRow + 1, 1, labels.length, 1).setValues(labels.map(v => [v]));
+    const end = startRow + labels.length;
+    const total = end + 1;
+    const countFormulas = Array.from(
+      { length: labels.length },
+      () => [
+        "=COUNTIFS('Base Filtrada (Fórmula)'!N:N;RC1;'Base Filtrada (Fórmula)'!O:O;\"Óbito\")" +
+        "+COUNTIFS('Base Filtrada (Fórmula)'!N:N;RC1;'Base Filtrada (Fórmula)'!O:O;\"Residência\")" +
+        "+COUNTIFS('Base Filtrada (Fórmula)'!N:N;RC1;'Base Filtrada (Fórmula)'!O:O;\"Outro hospital\")"
+      ]
+    );
+    const uniqueFormulas = Array.from(
+      { length: labels.length },
+      () => [
+        "=IFERROR(COUNTUNIQUE(FILTER('Base Filtrada (Fórmula)'!C:C;'Base Filtrada (Fórmula)'!N:N=RC1;" +
+          "REGEXMATCH('Base Filtrada (Fórmula)'!O:O;\"^(Óbito|Residência|Outro hospital)$\")));0)"
+      ]
+    );
+    sh.getRange(startRow + 1, 2, labels.length, 1).setFormulasR1C1(countFormulas);
+    sh.getRange(startRow + 1, 4, labels.length, 1).setFormulasR1C1(uniqueFormulas);
+    sh.getRange(total, 1, 1, 5)
+      .setValues([['TOTAL', '', '', '', '']])
+      .setBackground(COLOR.header)
+      .setFontWeight('bold');
+    sh.getRange(total, 2).setFormula(`=SUM(B${startRow + 1}:B${end})`);
+    sh.getRange(total, 4).setFormula(
+      "=IFERROR(COUNTUNIQUE(FILTER('Base Filtrada (Fórmula)'!C:C;'Base Filtrada (Fórmula)'!N:N<>\"\";" +
+        "REGEXMATCH('Base Filtrada (Fórmula)'!O:O;\"^(Óbito|Residência|Outro hospital)$\")));0)"
+    );
+    const pctTotal = Array.from({ length: labels.length }, () => [`=IFERROR(RC[-1]/R${total}C2;0)`]);
+    const pctUnique = Array.from({ length: labels.length }, () => [`=IFERROR(RC[-1]/R${total}C4;0)`]);
+    sh.getRange(startRow + 1, 3, labels.length, 1).setFormulasR1C1(pctTotal);
+    sh.getRange(startRow + 1, 5, labels.length, 1).setFormulasR1C1(pctUnique);
+    sh.getRange(total, 3, 1, 1).setValue('');
+    sh.getRange(total, 5, 1, 1).setValue('');
+    bandTable(`A${startRow}:E${total}`, [3,5]);
+    return total + 2;
+  }
   function blocoDedupSimples(tituloBloco, colBase, apoioCol, startRow) {
     sh.getRange(startRow, 1, 1, 3)
       .setValues([[tituloBloco, 'Qtd', '%']])
@@ -512,6 +558,9 @@ function criarDashboardEpidemiologico() {
 
   // NOVO: Entradas – Setor (N) com totais e únicos
   rClin = blocoEntradaSetorCompleta(rClin);
+
+  // NOVO: Saídas – Setor (N) filtrando destinos de saída prioritários
+  rClin = blocoSaidaSetorCompleta(rClin);
 
   // Alta (Saída) – Destino (O) com totais e únicos
   rClin = blocoAltaPorDestino('Clínica Alta (Saída) – Destino (Óbito, Residência, Outro hospital)', rClin);
