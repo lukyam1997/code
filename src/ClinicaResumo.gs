@@ -179,9 +179,24 @@ function criarDashboardEpidemiologico() {
   const shUni = safeRecreateSheet_(ss, 'DadosÚnicos', shBase);
   shUni.getRange('A1').setValue('⚙️ Base deduplicada por prontuário (última ocorrência pela Data Saída)')
        .setFontWeight('bold').setFontColor(COLOR.textMuted);
-  shUni.getRange('A2').setFormula(
-    `=UNIQUE(SORTN(${baseSheetName}!${dataRangeA1};9^9;2;${baseSheetName}!C2:C;FALSE;${baseSheetName}!Q2:Q;FALSE))`
-  );
+  const dedupFormula = [
+    `=IFERROR(`,
+    `LET(`,
+    `dados;FILTER(${baseSheetName}!${dataRangeA1};LEN(${baseSheetName}!C2:C)>0);`,
+    `pront;INDEX(dados;;3);`,
+    `destino;INDEX(dados;;15);`,
+    `destinoUp;UPPER(destino);`,
+    `saida;INDEX(dados;;17);`,
+    `prioridade;IF(destinoUp="ÓBITO";1;IF(destinoUp="RESIDÊNCIA";2;IF(destinoUp="OUTRO HOSPITAL";2;IF(destinoUp="TRANSFERÊNCIA INTERNA";4;3))));`,
+    `ordem;SEQUENCE(ROWS(dados));`,
+    `ordenado;SORTBY(dados;pront;TRUE;prioridade;TRUE;saida;FALSE;ordem;FALSE);`,
+    `prontOrdenado;INDEX(ordenado;;3);`,
+    `primeira;MATCH(prontOrdenado;prontOrdenado;0)=SEQUENCE(ROWS(prontOrdenado));`,
+    `FILTER(ordenado;primeira)`,
+    `);{}`,
+    `)`
+  ].join('');
+  shUni.getRange('A2').setFormula(dedupFormula);
   SpreadsheetApp.flush();
   Utilities.sleep(120);
   shUni.hideSheet();
