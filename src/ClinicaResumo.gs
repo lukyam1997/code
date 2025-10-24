@@ -179,21 +179,22 @@ function criarDashboardEpidemiologico() {
   const shUni = safeRecreateSheet_(ss, 'DadosÚnicos', shBase);
   shUni.getRange('A1').setValue('⚙️ Base deduplicada por prontuário (última ocorrência pela Data Saída)')
        .setFontWeight('bold').setFontColor(COLOR.textMuted);
-  shUni.getRange('A2').setFormula(
-    `=LET(` +
-      `base;${baseSheetName}!${dataRangeA1};` +
-      `saida;${baseSheetName}!Q2:Q;` +
-      `entrada;${baseSheetName}!P2:P;` +
-      `pront;${baseSheetName}!C2:C;` +
-      `linhas;ROW(pront);` +
-      `mesBase;IF(saida<>"";TEXT(saida;"YYYY-MM");IF(entrada<>"";TEXT(entrada;"YYYY-MM");""));` +
-      `chave;IF(mesBase="";pront;mesBase&"|"&pront);` +
-      `dados;HSTACK(base;linhas;mesBase;chave);` +
-      `ordenado;SORTBY(dados;mesBase;-1;saida;-1;linhas;-1);` +
-      `dedup;SORTN(ordenado;9^9;2;COLUMNS(base)+3;TRUE);` +
-      `INDEX(dedup;;SEQUENCE(1;COLUMNS(base)))`
-    )`
-  );
+  const dedupFormulaParts = [
+    '=LET(',
+    `base;${baseSheetName}!${dataRangeA1};`,
+    `saida;${baseSheetName}!Q2:Q;`,
+    `entrada;${baseSheetName}!P2:P;`,
+    `pront;${baseSheetName}!C2:C;`,
+    `linhas;ROW(pront);`,
+    `mesBase;IF(saida<>"";TEXT(saida;"YYYY-MM");IF(entrada<>"";TEXT(entrada;"YYYY-MM");""));`,
+    `chave;IF(mesBase="";pront;mesBase&"|"&pront);`,
+    `dados;HSTACK(base;linhas;mesBase;chave);`,
+    `ordenado;SORTBY(dados;mesBase;-1;saida;-1;linhas;-1);`,
+    `dedup;SORTN(ordenado;9^9;2;COLUMNS(base)+3;TRUE);`,
+    `INDEX(dedup;;SEQUENCE(1;COLUMNS(base)))`,
+    ')'
+  ];
+  shUni.getRange('A2').setFormula(dedupFormulaParts.join(''));
   SpreadsheetApp.flush();
   Utilities.sleep(120);
   shUni.hideSheet();
