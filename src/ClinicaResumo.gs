@@ -107,7 +107,31 @@ function buildProfileFilterFormula_(rangeA1, baseSheet) {
   const obitoSelector = "UPPER(TRIM('PERFIL EPIDEMIOLÓGICO'!$M$1))";
   const obitoCondition =
     `IF(REGEXMATCH(${obitoSelector};"SIM$");IFERROR(${baseSheet}!O2:O="Óbito";FALSE);TRUE)`;
-  return `FILTER(${baseRange};${setorCondition};${obitoCondition})`;
+  const periodCondition =
+    "LET(" +
+      "tipoRaw;UPPER(TRIM('PERFIL EPIDEMIOLÓGICO'!$I$1));" +
+      "tipo;IF(tipoRaw=\"\";\"\";tipoRaw);" +
+      "usaSaida;REGEXMATCH(tipo;\"SA[ÍI]DA|ALTA\");" +
+      "usaAcum;REGEXMATCH(tipo;\"ACUMUL\");" +
+      `dadosEntrada;${baseSheet}!P2:P;` +
+      `dadosSaida;${baseSheet}!Q2:Q;` +
+      "dadosRef;IF(usaSaida;dadosSaida;dadosEntrada);" +
+      "anoTexto;TRIM('PERFIL EPIDEMIOLÓGICO'!$K$1);" +
+      "anoSel;IF(anoTexto=\"\";\"\";IFERROR(VALUE(anoTexto);\"\"));" +
+      "mesTexto;TRIM('PERFIL EPIDEMIOLÓGICO'!$J$1);" +
+      "mesSel;IF(mesTexto=\"\";\"\";" +
+        "LET(" +
+          "chave;LEFT(SUBSTITUTE(UPPER(mesTexto);\"Ç\";\"C\");3);" +
+          "lista;{\"JAN\";\"FEV\";\"MAR\";\"ABR\";\"MAI\";\"JUN\";\"JUL\";\"AGO\";\"SET\";\"OUT\";\"NOV\";\"DEZ\"};" +
+          "idx;IFERROR(MATCH(chave;lista;0);0);" +
+          "IF(idx>0;idx;IFERROR(VALUE(mesTexto);\"\"))" +
+        ")" +
+      ");" +
+      "condAno;IF(anoSel=\"\";TRUE;IFERROR(YEAR(dadosRef)=anoSel;FALSE));" +
+      "condMes;IF(mesSel=\"\";TRUE;IFERROR(MONTH(dadosRef)=mesSel;FALSE));" +
+      "IF(usaAcum;TRUE;AND(condAno;condMes))" +
+    ")";
+  return `FILTER(${baseRange};${periodCondition};${setorCondition};${obitoCondition})`;
 }
 
 /* ===== PRINCIPAL ===== */
@@ -156,7 +180,7 @@ function criarDashboardEpidemiologico() {
   shUni.getRange('A1').setValue('⚙️ Base deduplicada por prontuário (última ocorrência pela Data Saída)')
        .setFontWeight('bold').setFontColor(COLOR.textMuted);
   shUni.getRange('A2').setFormula(
-    `=UNIQUE(SORTN(${baseSheetName}!${dataRangeA1};9^9;2;${baseSheetName}!C2:C;TRUE;${baseSheetName}!Q2:Q;FALSE))`
+    `=UNIQUE(SORTN(${baseSheetName}!${dataRangeA1};9^9;2;${baseSheetName}!C2:C;FALSE;${baseSheetName}!Q2:Q;FALSE))`
   );
   SpreadsheetApp.flush();
   Utilities.sleep(120);
