@@ -78,7 +78,8 @@ function escapeFormulaString_(value) {
 function buildFilteredBaseFormula_(rangeA1) {
   const baseRange = `'Base Filtrada (Fórmula)'!${rangeA1}`;
   const setorCondition = "IF(OR(AND(TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1)=\"\";TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)=\"\");TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1)=\"HUC (GERAL)\";TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)=\"HUC (GERAL)\");'Base Filtrada (Fórmula)'!N2:N='Base Filtrada (Fórmula)'!N2:N;IF(AND(TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1)=\"\";TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)<>\"\");'Base Filtrada (Fórmula)'!N2:N=TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1);IF(TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)=\"\";'Base Filtrada (Fórmula)'!N2:N=TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1);(('Base Filtrada (Fórmula)'!N2:N=TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1))+('Base Filtrada (Fórmula)'!N2:N=TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)))>0)))";
-  const obitoCondition = "IF(EXACT(UPPER(TRIM('PERFIL EPIDEMIOLÓGICO'!$M$1));\"SIM\");'Base Filtrada (Fórmula)'!O2:O=\"Óbito\";'Base Filtrada (Fórmula)'!O2:O='Base Filtrada (Fórmula)'!O2:O)";
+  const obitoSelector = "UPPER(TRIM('PERFIL EPIDEMIOLÓGICO'!$M$1))";
+  const obitoCondition = `IF(REGEXMATCH(${obitoSelector};"SIM$");'Base Filtrada (Fórmula)'!O2:O="Óbito";TRUE)`;
   return `FILTER(${baseRange};${setorCondition};${obitoCondition})`;
 }
 
