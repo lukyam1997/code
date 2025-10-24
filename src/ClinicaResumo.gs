@@ -183,16 +183,27 @@ function criarDashboardEpidemiologico() {
     `=IFERROR(`,
     `LET(`,
     `dados;FILTER(${baseSheetName}!${dataRangeA1};LEN(${baseSheetName}!C2:C)>0);`,
+    `linhas;ROWS(dados);`,
     `pront;INDEX(dados;;3);`,
-    `destino;INDEX(dados;;15);`,
-    `destinoUp;UPPER(destino);`,
+    `destinoRaw;INDEX(dados;;15);`,
+    `destinoLimpo;IF(destinoRaw="";"";REGEXREPLACE(UPPER(TRIM(destinoRaw));"\\s+";" "));`,
     `saida;INDEX(dados;;17);`,
-    `prioridade;IF(destinoUp="ÓBITO";1;IF(destinoUp="RESIDÊNCIA";2;IF(destinoUp="OUTRO HOSPITAL";2;IF(destinoUp="TRANSFERÊNCIA INTERNA";4;3))));`,
-    `ordem;SEQUENCE(ROWS(dados));`,
-    `ordenado;SORTBY(dados;pront;TRUE;prioridade;TRUE;saida;FALSE;ordem;FALSE);`,
+    `prioridade;` +
+      `IF(` +
+        `IF(destinoLimpo="";FALSE;REGEXMATCH(destinoLimpo;"ÓBITO"));1;` +
+        `IF(` +
+          `IF(destinoLimpo="";FALSE;REGEXMATCH(destinoLimpo;"RESID[ÊE]NCIA|OUTRO HOSPITAL"));2;` +
+          `IF(` +
+            `IF(destinoLimpo="";FALSE;REGEXMATCH(destinoLimpo;"TRANSFER[ÊE]NCIA INTERNA"));4;3` +
+          `)` +
+        `)` +
+      `);`,
+    `ordem;SEQUENCE(linhas);`,
+    `ordenado;SORTBY(dados;pront;TRUE;prioridade;TRUE;saida;FALSE;ordem;TRUE);`,
     `prontOrdenado;INDEX(ordenado;;3);`,
-    `primeira;MATCH(prontOrdenado;prontOrdenado;0)=SEQUENCE(ROWS(prontOrdenado));`,
-    `FILTER(ordenado;primeira)`,
+    `anterior;IF(linhas>1;TAKE(prontOrdenado;linhas-1);{});`,
+    `primeira;IF(linhas=0;{};prontOrdenado<>VSTACK("";anterior));`,
+    `IF(linhas=0;{};FILTER(ordenado;primeira))`,
     `);{}`,
     `)`
   ].join('');
