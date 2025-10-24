@@ -75,6 +75,14 @@ function escapeFormulaString_(value) {
   return value.toString().replace(/"/g, '""');
 }
 
+function buildFilteredBaseFormula_(rangeA1) {
+  const baseRange = `'Base Filtrada (Fórmula)'!${rangeA1}`;
+  const setorCondition = "IF(OR(AND(TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1)=\"\";TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)=\"\");TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1)=\"HUC (GERAL)\";TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)=\"HUC (GERAL)\");'Base Filtrada (Fórmula)'!N2:N='Base Filtrada (Fórmula)'!N2:N;IF(AND(TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1)=\"\";TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)<>\"\");'Base Filtrada (Fórmula)'!N2:N=TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1);IF(TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)=\"\";'Base Filtrada (Fórmula)'!N2:N=TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1);(('Base Filtrada (Fórmula)'!N2:N=TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1))+('Base Filtrada (Fórmula)'!N2:N=TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)))>0)))";
+  const obitoSelector = "UPPER(TRIM('PERFIL EPIDEMIOLÓGICO'!$M$1))";
+  const obitoCondition = `IF(REGEXMATCH(${obitoSelector};"SIM$");'Base Filtrada (Fórmula)'!O2:O="Óbito";TRUE)`;
+  return `FILTER(${baseRange};${setorCondition};${obitoCondition})`;
+}
+
 /* ===== PRINCIPAL ===== */
 function criarDashboardEpidemiologico() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -88,6 +96,19 @@ function criarDashboardEpidemiologico() {
     SpreadsheetApp.getUi().alert('❌ Faltam abas obrigatórias: Base Filtrada (Fórmula), LISTAS DE APOIO, Municípios, Cadastro CIDS e PERFIL EPIDEMIOLÓGICO.');
     return;
   }
+
+  const filteredSheetName = 'Base Filtrada (Filtro)';
+  const shBaseFiltro = safeRecreateSheet_(ss, filteredSheetName, shBase);
+  const headerCols = shBase.getLastColumn();
+  if (headerCols > 0) {
+    shBaseFiltro.getRange(1, 1, 1, headerCols)
+      .setValues(shBase.getRange(1, 1, 1, headerCols).getValues());
+  }
+  const baseFilteredFormula = buildFilteredBaseFormula_('A2:Y');
+  shBaseFiltro.getRange('A2').setFormula(`=IFERROR(${baseFilteredFormula};"")`);
+  SpreadsheetApp.flush();
+  Utilities.sleep(120);
+  shBaseFiltro.hideSheet();
 
   /* ===== PALETA / UI ===== */
   const COLOR = {
@@ -105,7 +126,7 @@ function criarDashboardEpidemiologico() {
   shUni.getRange('A1').setValue('⚙️ Base deduplicada por prontuário (última ocorrência pela Data Saída)')
        .setFontWeight('bold').setFontColor(COLOR.textMuted);
   shUni.getRange('A2').setFormula(
-    "=UNIQUE(SORTN('Base Filtrada (Fórmula)'!A2:Y;9^9;2;'Base Filtrada (Fórmula)'!C2:C;TRUE;'Base Filtrada (Fórmula)'!Q2:Q;FALSE))"
+    `=UNIQUE(SORTN('${filteredSheetName}'!A2:Y;9^9;2;'${filteredSheetName}'!C2:C;TRUE;'${filteredSheetName}'!Q2:Q;FALSE))`
   );
   SpreadsheetApp.flush();
   Utilities.sleep(120);
@@ -117,13 +138,10 @@ function criarDashboardEpidemiologico() {
   // Fluxo Entradas × Altas – robusto
   shData.getRange('A1:C1').setValues([['Datas (período)','Entradas (dia)','Altas (dia)']]).setFontWeight('bold');
   shData.getRange('A2').setFormula(
-    "=UNIQUE(SORT({" +
-      "FILTER('Base Filtrada (Fórmula)'!P2:P;'Base Filtrada (Fórmula)'!P2:P<>\"\");" +
-      "FILTER('Base Filtrada (Fórmula)'!Q2:Q;'Base Filtrada (Fórmula)'!Q2:Q<>\"\")" +
-    "}))"
+    `=UNIQUE(SORT({FILTER('${filteredSheetName}'!P2:P;'${filteredSheetName}'!P2:P<>""");FILTER('${filteredSheetName}'!Q2:Q;'${filteredSheetName}'!Q2:Q<>""")}))`
   );
-  shData.getRange('B2').setFormula("=ARRAYFORMULA(IF(A2:A=\"\";;COUNTIF('Base Filtrada (Fórmula)'!P:P;A2:A)))");
-  shData.getRange('C2').setFormula("=ARRAYFORMULA(IF(A2:A=\"\";;COUNTIF('Base Filtrada (Fórmula)'!Q:Q;A2:A)))");
+  shData.getRange('B2').setFormula(`=ARRAYFORMULA(IF(A2:A=\"\";;COUNTIF('${filteredSheetName}'!P2:P;A2:A)))`);
+  shData.getRange('C2').setFormula(`=ARRAYFORMULA(IF(A2:A=\"\";;COUNTIF('${filteredSheetName}'!Q2:Q;A2:A)))`);
 
   // Especialidades (dedup)
   shData.getRange('E1:F1').setValues([['Especialidade','Qtd (dedup)']]).setFontWeight('bold');
@@ -227,7 +245,7 @@ function criarDashboardEpidemiologico() {
   /* KPI cards – linha 1 */
   const kpiRow1 = row;
   kpiCard(kpiRow1, 1,  'Pacientes Únicos',            "=COUNTA(DadosÚnicos!C2:C)", '#,##0', '👤');
-  kpiCard(kpiRow1, 4,  'Total de Internações',        "=COUNTA('Base Filtrada (Fórmula)'!C2:C)", '#,##0', '🏥');
+  kpiCard(kpiRow1, 4,  'Total de Internações',        `=COUNTA('${filteredSheetName}'!C2:C)`, '#,##0', '🏥');
   kpiCard(kpiRow1, 7,  'Taxa de Óbito',               "=IFERROR(COUNTIFS(DadosÚnicos!O:O;\"Óbito\")/COUNTA(DadosÚnicos!C2:C);0)", '0.0%', '☠️');
   kpiCard(kpiRow1, 10, 'Média de Permanência (dias)', "=AVERAGE(DadosÚnicos!R:R)", '0.00', '⏱️');
   row = kpiRow1 + 3;
@@ -409,7 +427,7 @@ function criarDashboardEpidemiologico() {
     sh.getRange(startRow + 1, 1, labels.length, 1).setValues(labels.map(v => [v]));
     const end = startRow + labels.length;
     const total = end + 1;
-    const countFormulas = Array.from({ length: labels.length }, () => [`=COUNTIFS('Base Filtrada (Fórmula)'!${colBase}:${colBase};RC1)`]);
+    const countFormulas = Array.from({ length: labels.length }, () => [`=COUNTIFS('${filteredSheetName}'!${colBase}:${colBase};RC1)`]);
     sh.getRange(startRow + 1, 2, labels.length, 1).setFormulasR1C1(countFormulas);
     sh.getRange(total, 1, 1, 3)
       .setValues([['TOTAL', '', '']])
@@ -431,7 +449,7 @@ function criarDashboardEpidemiologico() {
     sh.getRange(startRow + 1, 1, labels.length, 1).setValues(labels.map(v => [v]));
     const end = startRow + labels.length;
     const total = end + 1;
-    const countFormulas = Array.from({ length: labels.length }, () => [`=COUNTIFS('Base Filtrada (Fórmula)'!N:N;RC1)`]);
+    const countFormulas = Array.from({ length: labels.length }, () => [`=COUNTIFS('${filteredSheetName}'!N:N;RC1)`]);
     const uniqueFormulas = Array.from(
       { length: labels.length },
       () => [`=COUNTIFS(DadosÚnicos!N:N;RC1)`]
@@ -466,9 +484,9 @@ function criarDashboardEpidemiologico() {
     const countFormulas = Array.from(
       { length: labels.length },
       () => [
-        "=COUNTIFS('Base Filtrada (Fórmula)'!N:N;RC1;'Base Filtrada (Fórmula)'!O:O;\"Óbito\")" +
-        "+COUNTIFS('Base Filtrada (Fórmula)'!N:N;RC1;'Base Filtrada (Fórmula)'!O:O;\"Residência\")" +
-        "+COUNTIFS('Base Filtrada (Fórmula)'!N:N;RC1;'Base Filtrada (Fórmula)'!O:O;\"Outro hospital\")"
+        `=COUNTIFS('${filteredSheetName}'!N:N;RC1;'${filteredSheetName}'!O:O;"Óbito")` +
+        `+COUNTIFS('${filteredSheetName}'!N:N;RC1;'${filteredSheetName}'!O:O;"Residência")` +
+        `+COUNTIFS('${filteredSheetName}'!N:N;RC1;'${filteredSheetName}'!O:O;"Outro hospital")`
       ]
     );
     const uniqueFormulas = Array.from(
@@ -526,7 +544,7 @@ function criarDashboardEpidemiologico() {
     sh.getRange(startRow + 1, 1, destinos.length, 1).setValues(destinos.map(v => [v]));
     const end = startRow + destinos.length;
     const total = end + 1;
-    const countFormulas = destinos.map(() => [`=COUNTIFS('Base Filtrada (Fórmula)'!O:O;RC1)`]);
+    const countFormulas = destinos.map(() => [`=COUNTIFS('${filteredSheetName}'!O:O;RC1)`]);
     const uniqueFormulas = destinos.map(() => [`=COUNTIFS(DadosÚnicos!O:O;RC1)`]);
     sh.getRange(startRow + 1, 2, destinos.length, 1).setFormulasR1C1(countFormulas);
     sh.getRange(startRow + 1, 4, destinos.length, 1).setFormulasR1C1(uniqueFormulas);
