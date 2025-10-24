@@ -75,11 +75,39 @@ function escapeFormulaString_(value) {
   return value.toString().replace(/"/g, '""');
 }
 
+function columnToLetter_(columnNumber) {
+  let letter = '';
+  let col = Math.max(1, columnNumber);
+  while (col > 0) {
+    const remainder = (col - 1) % 26;
+    letter = String.fromCharCode(65 + remainder) + letter;
+    col = Math.floor((col - 1) / 26);
+  }
+  return letter;
+}
+
 function buildFilteredBaseFormula_(rangeA1) {
-  const baseRange = `'Base Filtrada (Fórmula)'!${rangeA1}`;
-  const setorCondition = "IF(OR(AND(TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1)=\"\";TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)=\"\");TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1)=\"HUC (GERAL)\";TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)=\"HUC (GERAL)\");'Base Filtrada (Fórmula)'!N2:N='Base Filtrada (Fórmula)'!N2:N;IF(AND(TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1)=\"\";TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)<>\"\");'Base Filtrada (Fórmula)'!N2:N=TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1);IF(TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)=\"\";'Base Filtrada (Fórmula)'!N2:N=TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1);(('Base Filtrada (Fórmula)'!N2:N=TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1))+('Base Filtrada (Fórmula)'!N2:N=TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)))>0)))";
+  const baseSheet = "'Base Filtrada (Fórmula)'";
+  const baseRange = `${baseSheet}!${rangeA1}`;
+  const setorRange = `${baseSheet}!N2:N`;
+  const setorEqualsSelf = `IFERROR(${setorRange}=${setorRange};TRUE)`;
+  const setorEquals = selector => `IFERROR(${setorRange}=TRIM(${selector});FALSE)`;
+  const setorCondition =
+    "IF(OR(AND(TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1)=\"\";TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)=\"\");" +
+      "TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1)=\"HUC (GERAL)\";" +
+      "TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)=\"HUC (GERAL)\");" +
+      `${setorEqualsSelf};` +
+      "IF(AND(TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1)=\"\";TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)<>\"\");" +
+        `${setorEquals("'PERFIL EPIDEMIOLÓGICO'!$H$1")};` +
+        "IF(TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)=\"\";" +
+          `${setorEquals("'PERFIL EPIDEMIOLÓGICO'!$G$1")};` +
+          `((${setorEquals("'PERFIL EPIDEMIOLÓGICO'!$G$1")}+${setorEquals("'PERFIL EPIDEMIOLÓGICO'!$H$1")})>0)` +
+        ")" +
+      ")" +
+    ")";
   const obitoSelector = "UPPER(TRIM('PERFIL EPIDEMIOLÓGICO'!$M$1))";
-  const obitoCondition = `IF(REGEXMATCH(${obitoSelector};"SIM$");'Base Filtrada (Fórmula)'!O2:O="Óbito";TRUE)`;
+  const obitoCondition =
+    `IF(REGEXMATCH(${obitoSelector};"SIM$");IFERROR(${baseSheet}!O2:O="Óbito";FALSE);TRUE)`;
   return `FILTER(${baseRange};${setorCondition};${obitoCondition})`;
 }
 
@@ -104,7 +132,9 @@ function criarDashboardEpidemiologico() {
     shBaseFiltro.getRange(1, 1, 1, headerCols)
       .setValues(shBase.getRange(1, 1, 1, headerCols).getValues());
   }
-  const baseFilteredFormula = buildFilteredBaseFormula_('A2:Y');
+  const lastColLetter = headerCols > 0 ? columnToLetter_(headerCols) : 'A';
+  const dataRangeA1 = `A2:${lastColLetter}`;
+  const baseFilteredFormula = buildFilteredBaseFormula_(dataRangeA1);
   shBaseFiltro.getRange('A2').setFormula(`=IFERROR(${baseFilteredFormula};"")`);
   SpreadsheetApp.flush();
   Utilities.sleep(120);
@@ -126,7 +156,7 @@ function criarDashboardEpidemiologico() {
   shUni.getRange('A1').setValue('⚙️ Base deduplicada por prontuário (última ocorrência pela Data Saída)')
        .setFontWeight('bold').setFontColor(COLOR.textMuted);
   shUni.getRange('A2').setFormula(
-    `=UNIQUE(SORTN('${filteredSheetName}'!A2:Y;9^9;2;'${filteredSheetName}'!C2:C;TRUE;'${filteredSheetName}'!Q2:Q;FALSE))`
+    `=UNIQUE(SORTN('${filteredSheetName}'!${dataRangeA1};9^9;2;'${filteredSheetName}'!C2:C;TRUE;'${filteredSheetName}'!Q2:Q;FALSE))`
   );
   SpreadsheetApp.flush();
   Utilities.sleep(120);
