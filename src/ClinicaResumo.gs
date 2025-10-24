@@ -86,8 +86,7 @@ function columnToLetter_(columnNumber) {
   return letter;
 }
 
-function buildFilteredBaseFormula_(rangeA1) {
-  const baseSheet = "'Base Filtrada (Fórmula)'";
+function buildProfileFilterFormula_(rangeA1, baseSheet) {
   const baseRange = `${baseSheet}!${rangeA1}`;
   const setorRange = `${baseSheet}!N2:N`;
   const setorEqualsSelf = `IFERROR(${setorRange}=${setorRange};TRUE)`;
@@ -134,7 +133,8 @@ function criarDashboardEpidemiologico() {
   }
   const lastColLetter = headerCols > 0 ? columnToLetter_(headerCols) : 'A';
   const dataRangeA1 = `A2:${lastColLetter}`;
-  const baseFilteredFormula = buildFilteredBaseFormula_(dataRangeA1);
+  const baseSheetName = "'Base Filtrada (Fórmula)'";
+  const baseFilteredFormula = buildProfileFilterFormula_(dataRangeA1, baseSheetName);
   shBaseFiltro.getRange('A2').setFormula(`=IFERROR(${baseFilteredFormula};"")`);
   SpreadsheetApp.flush();
   Utilities.sleep(120);
@@ -156,11 +156,22 @@ function criarDashboardEpidemiologico() {
   shUni.getRange('A1').setValue('⚙️ Base deduplicada por prontuário (última ocorrência pela Data Saída)')
        .setFontWeight('bold').setFontColor(COLOR.textMuted);
   shUni.getRange('A2').setFormula(
-    `=UNIQUE(SORTN('${filteredSheetName}'!${dataRangeA1};9^9;2;'${filteredSheetName}'!C2:C;TRUE;'${filteredSheetName}'!Q2:Q;FALSE))`
+    `=UNIQUE(SORTN(${baseSheetName}!${dataRangeA1};9^9;2;${baseSheetName}!C2:C;TRUE;${baseSheetName}!Q2:Q;FALSE))`
   );
   SpreadsheetApp.flush();
   Utilities.sleep(120);
   shUni.hideSheet();
+
+  const shUniFiltro = safeRecreateSheet_(ss, 'DadosÚnicos Filtrados', shUni);
+  shUniFiltro.getRange('A1')
+    .setValue('⚙️ Base deduplicada filtrada pelo perfil selecionado')
+    .setFontWeight('bold')
+    .setFontColor(COLOR.textMuted);
+  const uniqueFilteredFormula = buildProfileFilterFormula_(dataRangeA1, "'DadosÚnicos'");
+  shUniFiltro.getRange('A2').setFormula(`=IFERROR(${uniqueFilteredFormula};{})`);
+  SpreadsheetApp.flush();
+  Utilities.sleep(120);
+  shUniFiltro.hideSheet();
 
   /* ===== 2) ⚙️DATA (séries p/ gráficos e auxiliares) ===== */
   const shData = safeRecreateSheet_(ss, '⚙️DATA', shBase);
