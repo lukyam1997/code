@@ -179,9 +179,35 @@ function criarDashboardEpidemiologico() {
   const shUni = safeRecreateSheet_(ss, 'DadosÚnicos', shBase);
   shUni.getRange('A1').setValue('⚙️ Base deduplicada por prontuário (última ocorrência pela Data Saída)')
        .setFontWeight('bold').setFontColor(COLOR.textMuted);
-  shUni.getRange('A2').setFormula(
-    `=UNIQUE(SORTN(${baseSheetName}!${dataRangeA1};9^9;2;${baseSheetName}!C2:C;FALSE;${baseSheetName}!Q2:Q;FALSE))`
-  );
+  const dedupFormula = [
+    `=IFERROR(`,
+    `LET(`,
+    `dados;FILTER(${baseSheetName}!${dataRangeA1};LEN(${baseSheetName}!C2:C)>0);`,
+    `linhas;ROWS(dados);`,
+    `pront;INDEX(dados;;3);`,
+    `destinoRaw;INDEX(dados;;15);`,
+    `destinoLimpo;IF(destinoRaw="";"";REGEXREPLACE(UPPER(TRIM(destinoRaw));"\\s+";" "));`,
+    `saida;INDEX(dados;;17);`,
+    `prioridade;` +
+      `IF(` +
+        `IF(destinoLimpo="";FALSE;REGEXMATCH(destinoLimpo;"ÓBITO"));1;` +
+        `IF(` +
+          `IF(destinoLimpo="";FALSE;REGEXMATCH(destinoLimpo;"RESID[ÊE]NCIA|OUTRO HOSPITAL"));2;` +
+          `IF(` +
+            `IF(destinoLimpo="";FALSE;REGEXMATCH(destinoLimpo;"TRANSFER[ÊE]NCIA INTERNA"));4;3` +
+          `)` +
+        `)` +
+      `);`,
+    `ordem;SEQUENCE(linhas);`,
+    `ordenado;SORTBY(dados;pront;TRUE;prioridade;TRUE;saida;FALSE;ordem;TRUE);`,
+    `prontOrdenado;INDEX(ordenado;;3);`,
+    `anterior;IF(linhas>1;TAKE(prontOrdenado;linhas-1);{});`,
+    `primeira;IF(linhas=0;{};prontOrdenado<>VSTACK("";anterior));`,
+    `IF(linhas=0;{};FILTER(ordenado;primeira))`,
+    `);{}`,
+    `)`
+  ].join('');
+  shUni.getRange('A2').setFormula(dedupFormula);
   SpreadsheetApp.flush();
   Utilities.sleep(120);
   shUni.hideSheet();
