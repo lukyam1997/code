@@ -1,7 +1,7 @@
 /************************************************************
 📊 DASHBOARD EPIDEMIOLÓGICO – Luky + GPT-5 (V12.2.3 – Hotfix estabilidade + métricas únicas)
 • Funções em inglês nas fórmulas; separador de argumentos ";"
-• Deduplicação por Prontuário (C) usando a última Data Saída (Q)
+• Deduplicação por Prontuário (C) priorizando destino (Óbito > Residência/Outro Hospital > demais), permanência (R) e última Data Saída (Q)
 • Abas requeridas:
   - 'Base Filtrada (Fórmula)' (A:Y)
   - 'LISTAS DE APOIO' (valores únicos por coluna com mesmo cabeçalho)
@@ -86,52 +86,128 @@ function columnToLetter_(columnNumber) {
   return letter;
 }
 
-function buildProfileFilterFormula_(rangeA1, baseSheet) {
-  const baseRange = `${baseSheet}!${rangeA1}`;
-  const setorRange = `${baseSheet}!N2:N`;
-  const setorEqualsSelf = `IFERROR(${setorRange}=${setorRange};TRUE)`;
-  const setorEquals = selector => `IFERROR(${setorRange}=TRIM(${selector});FALSE)`;
-  const setorCondition =
-    "IF(OR(AND(TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1)=\"\";TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)=\"\");" +
-      "TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1)=\"HUC (GERAL)\";" +
-      "TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)=\"HUC (GERAL)\");" +
-      `${setorEqualsSelf};` +
-      "IF(AND(TRIM('PERFIL EPIDEMIOLÓGICO'!$G$1)=\"\";TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)<>\"\");" +
-        `${setorEquals("'PERFIL EPIDEMIOLÓGICO'!$H$1")};` +
-        "IF(TRIM('PERFIL EPIDEMIOLÓGICO'!$H$1)=\"\";" +
-          `${setorEquals("'PERFIL EPIDEMIOLÓGICO'!$G$1")};` +
-          `((${setorEquals("'PERFIL EPIDEMIOLÓGICO'!$G$1")}+${setorEquals("'PERFIL EPIDEMIOLÓGICO'!$H$1")})>0)` +
-        ")" +
-      ")" +
-    ")";
-  const obitoSelector = "UPPER(TRIM('PERFIL EPIDEMIOLÓGICO'!$M$1))";
-  const obitoCondition =
-    `IF(REGEXMATCH(${obitoSelector};"SIM$");IFERROR(${baseSheet}!O2:O="Óbito";FALSE);TRUE)`;
-  const periodCondition =
-    "LET(" +
-      "tipoRaw;UPPER(TRIM('PERFIL EPIDEMIOLÓGICO'!$I$1));" +
-      "tipo;IF(tipoRaw=\"\";\"\";tipoRaw);" +
-      "usaSaida;REGEXMATCH(tipo;\"SA[ÍI]DA|ALTA\");" +
-      "usaAcum;REGEXMATCH(tipo;\"ACUMUL\");" +
-      `dadosEntrada;${baseSheet}!P2:P;` +
-      `dadosSaida;${baseSheet}!Q2:Q;` +
-      "dadosRef;IF(usaSaida;dadosSaida;dadosEntrada);" +
-      "anoTexto;TRIM('PERFIL EPIDEMIOLÓGICO'!$K$1);" +
-      "anoSel;IF(anoTexto=\"\";\"\";IFERROR(VALUE(anoTexto);\"\"));" +
-      "mesTexto;TRIM('PERFIL EPIDEMIOLÓGICO'!$J$1);" +
-      "mesSel;IF(mesTexto=\"\";\"\";" +
-        "LET(" +
-          "chave;LEFT(SUBSTITUTE(UPPER(mesTexto);\"Ç\";\"C\");3);" +
-          "lista;{\"JAN\";\"FEV\";\"MAR\";\"ABR\";\"MAI\";\"JUN\";\"JUL\";\"AGO\";\"SET\";\"OUT\";\"NOV\";\"DEZ\"};" +
-          "idx;IFERROR(MATCH(chave;lista;0);0);" +
-          "IF(idx>0;idx;IFERROR(VALUE(mesTexto);\"\"))" +
-        ")" +
-      ");" +
-      "condAno;IF(anoSel=\"\";TRUE;IFERROR(YEAR(dadosRef)=anoSel;FALSE));" +
-      "condMes;IF(mesSel=\"\";TRUE;IFERROR(MONTH(dadosRef)=mesSel;FALSE));" +
-      "IF(usaAcum;TRUE;AND(condAno;condMes))" +
-    ")";
-  return `FILTER(${baseRange};${periodCondition};${setorCondition};${obitoCondition})`;
+const COL = {
+  PRONTUARIO: 3,
+  SEXO: 5,
+  IDADE: 6,
+  ESCOLARIDADE: 7,
+  RACA_COR: 8,
+  MUNICIPIO: 9,
+  REGIAO_SAUDE: 10,
+  ADS: 11,
+  PROCEDENCIA: 12,
+  CLINICA_ORIGEM: 13,
+  SETOR: 14,
+  DESTINO: 15,
+  DATA_ENTRADA: 16,
+  DATA_SAIDA: 17,
+  PERMANENCIA: 18,
+  CID: 19,
+  ESPECIALIDADE: 21,
+  LEITO: 22,
+  OBITO_PRIORITARIO: 23,
+  CLASSIFICACAO_OBITO: 24,
+};
+
+function normalizeText_(value) {
+  if (value === null || value === undefined) return '';
+  return value
+    .toString()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toUpperCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function equalsText_(a, b) {
+  return normalizeText_(a) === normalizeText_(b);
+}
+
+function toNumber_(value) {
+  if (typeof value === 'number') return value;
+  if (value instanceof Date && !isNaN(value)) return value.getTime();
+  if (value === null || value === undefined) return NaN;
+  const asString = value.toString().replace(',', '.').trim();
+  if (asString === '') return NaN;
+  const parsed = Number(asString);
+  return isNaN(parsed) ? NaN : parsed;
+}
+
+function toDate_(value) {
+  if (value instanceof Date && !isNaN(value)) return value;
+  if (typeof value === 'number' && !isNaN(value)) {
+    const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+    return new Date(excelEpoch.getTime() + value * 24 * 60 * 60 * 1000);
+  }
+  if (typeof value === 'string') {
+    const parsed = new Date(value);
+    if (!isNaN(parsed)) return parsed;
+  }
+  return null;
+}
+
+function toDateKey_(value) {
+  const date = toDate_(value);
+  if (!date) return null;
+  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function parseMonth_(raw) {
+  if (!raw) return null;
+  const value = raw.toString().trim();
+  if (value === '') return null;
+  const numeric = Number(value.replace(/[^0-9]/g, ''));
+  if (!isNaN(numeric) && numeric >= 1 && numeric <= 12) return numeric;
+  const abrevs = {
+    JAN: 1,
+    FEV: 2,
+    MAR: 3,
+    ABR: 4,
+    MAI: 5,
+    JUN: 6,
+    JUL: 7,
+    AGO: 8,
+    SET: 9,
+    OUT: 10,
+    NOV: 11,
+    DEZ: 12,
+  };
+  const key = normalizeText_(value).slice(0, 3);
+  return abrevs[key] || null;
+}
+
+function median_(numbers) {
+  const ordered = numbers.filter(n => !isNaN(n)).sort((a, b) => a - b);
+  if (ordered.length === 0) return NaN;
+  const mid = Math.floor(ordered.length / 2);
+  if (ordered.length % 2 === 0) return (ordered[mid - 1] + ordered[mid]) / 2;
+  return ordered[mid];
+}
+
+function durationToDays_(value) {
+  if (typeof value === 'number') return value;
+  if (value instanceof Date && !isNaN(value)) {
+    const epoch = new Date(Date.UTC(1899, 11, 30));
+    return (value.getTime() - epoch.getTime()) / (24 * 60 * 60 * 1000);
+  }
+  if (value === null || value === undefined) return NaN;
+  const parsed = Number(value.toString().replace(',', '.'));
+  return isNaN(parsed) ? NaN : parsed;
+}
+
+function destinoPriority_(value) {
+  const normalized = normalizeText_(value);
+  if (normalized.indexOf('OBITO') >= 0) return 0;
+  if (normalized.indexOf('RESIDENCIA') >= 0 || normalized.indexOf('OUTRO HOSPITAL') >= 0) return 1;
+  return 2;
+}
+
+function average_(numbers) {
+  const valid = numbers.filter(n => !isNaN(n));
+  if (valid.length === 0) return NaN;
+  const sum = valid.reduce((acc, n) => acc + n, 0);
+  return sum / valid.length;
 }
 
 /* ===== PRINCIPAL ===== */
@@ -148,18 +224,140 @@ function criarDashboardEpidemiologico() {
     return;
   }
 
+  const headerCols = shBase.getLastColumn();
+  const headerRow = headerCols > 0 ? shBase.getRange(1, 1, 1, headerCols).getValues()[0] : [];
+  const baseLastRow = shBase.getLastRow();
+  const rawValues = headerCols > 0 && baseLastRow > 1
+    ? shBase.getRange(2, 1, baseLastRow - 1, headerCols).getValues()
+    : [];
+  const rowsWithIndex = [];
+  rawValues.forEach((row, idx) => {
+    if (normalizeText_(row[COL.PRONTUARIO - 1]) !== '') {
+      rowsWithIndex.push({ row, index: idx });
+    }
+  });
+
+  const tipoRaw = shPerfil.getRange('I1').getDisplayValue();
+  const mesRaw  = shPerfil.getRange('J1').getDisplayValue();
+  const anoRaw  = shPerfil.getRange('K1').getDisplayValue();
+  const setorA  = shPerfil.getRange('G1').getDisplayValue();
+  const setorB  = shPerfil.getRange('H1').getDisplayValue();
+  const obitoRaw = shPerfil.getRange('M1').getDisplayValue();
+
+  const tipoKey  = normalizeText_(tipoRaw);
+  const setorAKey = normalizeText_(setorA);
+  const setorBKey = normalizeText_(setorB);
+  const obitoKey  = normalizeText_(obitoRaw);
+
+  const requireObito = /SIM$/.test(obitoKey);
+  const useSaida = /SAIDA|ALTA/.test(tipoKey);
+  const useAcum  = /ACUMUL/.test(tipoKey);
+  const anoSel = (() => {
+    if (!anoRaw) return null;
+    const cleaned = Number(anoRaw.toString().replace(/[^0-9]/g, ''));
+    return cleaned ? cleaned : null;
+  })();
+  const mesSel = parseMonth_(mesRaw);
+
+  const setorIsGlobal = (!setorAKey && !setorBKey) || setorAKey === 'HUC (GERAL)' || setorBKey === 'HUC (GERAL)';
+  function matchesSetor(value) {
+    if (setorIsGlobal) return true;
+    const target = normalizeText_(value);
+    if (!setorAKey) return target === setorBKey;
+    if (!setorBKey) return target === setorAKey;
+    return target === setorAKey || target === setorBKey;
+  }
+
+  function matchesPeriodo(row) {
+    if (useAcum) return true;
+    const ref = useSaida ? row[COL.DATA_SAIDA - 1] : row[COL.DATA_ENTRADA - 1];
+    const date = toDate_(ref);
+    if (!date) return false;
+    if (anoSel && date.getFullYear() !== anoSel) return false;
+    if (mesSel && date.getMonth() + 1 !== mesSel) return false;
+    return true;
+  }
+
+  function matchesProfile(row) {
+    return matchesSetor(row[COL.SETOR - 1]) &&
+      (!requireObito || destinoPriority_(row[COL.DESTINO - 1]) === 0) &&
+      matchesPeriodo(row);
+  }
+
+  function deduplicateRows(rows) {
+    const groups = new Map();
+    rows.forEach(entry => {
+      const key = normalizeText_(entry.row[COL.PRONTUARIO - 1]);
+      if (!key) return;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(entry);
+    });
+    const selected = [];
+    groups.forEach(list => {
+      list.sort((a, b) => {
+        const priA = destinoPriority_(a.row[COL.DESTINO - 1]);
+        const priB = destinoPriority_(b.row[COL.DESTINO - 1]);
+        if (priA !== priB) return priA - priB;
+        const permA = durationToDays_(a.row[COL.PERMANENCIA - 1]);
+        const permB = durationToDays_(b.row[COL.PERMANENCIA - 1]);
+        if (!isNaN(permA) || !isNaN(permB)) {
+          if (isNaN(permA)) return 1;
+          if (isNaN(permB)) return -1;
+          if (permA !== permB) return permB - permA;
+        }
+        const saidaA = toDate_(a.row[COL.DATA_SAIDA - 1]);
+        const saidaB = toDate_(b.row[COL.DATA_SAIDA - 1]);
+        const timeA = saidaA ? saidaA.getTime() : -Infinity;
+        const timeB = saidaB ? saidaB.getTime() : -Infinity;
+        if (timeA !== timeB) return timeB - timeA;
+        return a.index - b.index;
+      });
+      selected.push(list[0]);
+    });
+    selected.sort((a, b) => {
+      const prontA = normalizeText_(a.row[COL.PRONTUARIO - 1]);
+      const prontB = normalizeText_(b.row[COL.PRONTUARIO - 1]);
+      if (prontA < prontB) return -1;
+      if (prontA > prontB) return 1;
+      return a.index - b.index;
+    });
+    return selected.map(item => item.row);
+  }
+
+  const filteredRows = rowsWithIndex.filter(entry => matchesProfile(entry.row)).map(entry => entry.row);
+  const dedupRows = deduplicateRows(rowsWithIndex);
+  const dedupFilteredRows = dedupRows.filter(row => matchesProfile(row));
+
+  const periodoTexto = `${tipoRaw || ''} – ${mesRaw || ''} / ${anoRaw || ''}`;
+
+  function dateMin(rows, colIndex) {
+    let min = null;
+    rows.forEach(row => {
+      const date = toDate_(row[colIndex - 1]);
+      if (!date) return;
+      if (!min || date < min) min = date;
+    });
+    return min;
+  }
+
+  function dateMax(rows, colIndex) {
+    let max = null;
+    rows.forEach(row => {
+      const date = toDate_(row[colIndex - 1]);
+      if (!date) return;
+      if (!max || date > max) max = date;
+    });
+    return max;
+  }
+
   const filteredSheetName = 'Base Filtrada (Filtro)';
   const shBaseFiltro = safeRecreateSheet_(ss, filteredSheetName, shBase);
-  const headerCols = shBase.getLastColumn();
-  if (headerCols > 0) {
-    shBaseFiltro.getRange(1, 1, 1, headerCols)
-      .setValues(shBase.getRange(1, 1, 1, headerCols).getValues());
+  if (headerRow.length) {
+    shBaseFiltro.getRange(1, 1, 1, headerRow.length).setValues([headerRow]);
   }
-  const lastColLetter = headerCols > 0 ? columnToLetter_(headerCols) : 'A';
-  const dataRangeA1 = `A2:${lastColLetter}`;
-  const baseSheetName = "'Base Filtrada (Fórmula)'";
-  const baseFilteredFormula = buildProfileFilterFormula_(dataRangeA1, baseSheetName);
-  shBaseFiltro.getRange('A2').setFormula(`=IFERROR(${baseFilteredFormula};"")`);
+  if (filteredRows.length) {
+    shBaseFiltro.getRange(2, 1, filteredRows.length, headerCols).setValues(filteredRows);
+  }
   SpreadsheetApp.flush();
   Utilities.sleep(120);
   shBaseFiltro.hideSheet();
@@ -177,37 +375,13 @@ function criarDashboardEpidemiologico() {
 
   /* ===== 1) DEDUP "DadosÚnicos" ===== */
   const shUni = safeRecreateSheet_(ss, 'DadosÚnicos', shBase);
-  shUni.getRange('A1').setValue('⚙️ Base deduplicada por prontuário (última ocorrência pela Data Saída)')
-       .setFontWeight('bold').setFontColor(COLOR.textMuted);
-  const dedupFormula = [
-    `=IFERROR(`,
-    `LET(`,
-    `dados;FILTER(${baseSheetName}!${dataRangeA1};LEN(${baseSheetName}!C2:C)>0);`,
-    `linhas;ROWS(dados);`,
-    `pront;INDEX(dados;;3);`,
-    `destinoRaw;INDEX(dados;;15);`,
-    `destinoLimpo;IF(destinoRaw="";"";REGEXREPLACE(UPPER(TRIM(destinoRaw));"\\s+";" "));`,
-    `saida;INDEX(dados;;17);`,
-    `prioridade;` +
-      `IF(` +
-        `IF(destinoLimpo="";FALSE;REGEXMATCH(destinoLimpo;"ÓBITO"));1;` +
-        `IF(` +
-          `IF(destinoLimpo="";FALSE;REGEXMATCH(destinoLimpo;"RESID[ÊE]NCIA|OUTRO HOSPITAL"));2;` +
-          `IF(` +
-            `IF(destinoLimpo="";FALSE;REGEXMATCH(destinoLimpo;"TRANSFER[ÊE]NCIA INTERNA"));4;3` +
-          `)` +
-        `)` +
-      `);`,
-    `ordem;SEQUENCE(linhas);`,
-    `ordenado;SORTBY(dados;pront;TRUE;prioridade;TRUE;saida;FALSE;ordem;TRUE);`,
-    `prontOrdenado;INDEX(ordenado;;3);`,
-    `anterior;IF(linhas>1;TAKE(prontOrdenado;linhas-1);{});`,
-    `primeira;IF(linhas=0;{};prontOrdenado<>VSTACK("";anterior));`,
-    `IF(linhas=0;{};FILTER(ordenado;primeira))`,
-    `);{}`,
-    `)`
-  ].join('');
-  shUni.getRange('A2').setFormula(dedupFormula);
+  shUni.getRange('A1')
+    .setValue('⚙️ Base deduplicada por prontuário (prioridade destino > permanência > última saída)')
+    .setFontWeight('bold')
+    .setFontColor(COLOR.textMuted);
+  if (dedupRows.length) {
+    shUni.getRange(2, 1, dedupRows.length, headerCols).setValues(dedupRows);
+  }
   SpreadsheetApp.flush();
   Utilities.sleep(120);
   shUni.hideSheet();
@@ -217,8 +391,9 @@ function criarDashboardEpidemiologico() {
     .setValue('⚙️ Base deduplicada filtrada pelo perfil selecionado')
     .setFontWeight('bold')
     .setFontColor(COLOR.textMuted);
-  const uniqueFilteredFormula = buildProfileFilterFormula_(dataRangeA1, "'DadosÚnicos'");
-  shUniFiltro.getRange('A2').setFormula(`=IFERROR(${uniqueFilteredFormula};{})`);
+  if (dedupFilteredRows.length) {
+    shUniFiltro.getRange(2, 1, dedupFilteredRows.length, headerCols).setValues(dedupFilteredRows);
+  }
   SpreadsheetApp.flush();
   Utilities.sleep(120);
   shUniFiltro.hideSheet();
@@ -226,42 +401,102 @@ function criarDashboardEpidemiologico() {
   /* ===== 2) ⚙️DATA (séries p/ gráficos e auxiliares) ===== */
   const shData = safeRecreateSheet_(ss, '⚙️DATA', shBase);
 
-  // Fluxo Entradas × Altas – robusto
   shData.getRange('A1:C1').setValues([['Datas (período)','Entradas (dia)','Altas (dia)']]).setFontWeight('bold');
-  shData.getRange('A2').setFormula(
-    `=UNIQUE(SORT({FILTER('${filteredSheetName}'!P2:P;'${filteredSheetName}'!P2:P<>""");FILTER('${filteredSheetName}'!Q2:Q;'${filteredSheetName}'!Q2:Q<>""")}))`
-  );
-  shData.getRange('B2').setFormula(`=ARRAYFORMULA(IF(A2:A=\"\";;COUNTIF('${filteredSheetName}'!P2:P;A2:A)))`);
-  shData.getRange('C2').setFormula(`=ARRAYFORMULA(IF(A2:A=\"\";;COUNTIF('${filteredSheetName}'!Q2:Q;A2:A)))`);
+  const entradasPorDia = new Map();
+  const altasPorDia = new Map();
+  filteredRows.forEach(row => {
+    const entradaKey = toDateKey_(row[COL.DATA_ENTRADA - 1]);
+    if (entradaKey !== null) {
+      entradasPorDia.set(entradaKey, (entradasPorDia.get(entradaKey) || 0) + 1);
+    }
+    const saidaKey = toDateKey_(row[COL.DATA_SAIDA - 1]);
+    if (saidaKey !== null) {
+      altasPorDia.set(saidaKey, (altasPorDia.get(saidaKey) || 0) + 1);
+    }
+  });
+  const datasFluxo = Array.from(new Set([...entradasPorDia.keys(), ...altasPorDia.keys()])).sort((a, b) => a - b);
+  if (datasFluxo.length) {
+    const fluxoValores = datasFluxo.map(key => [new Date(key), entradasPorDia.get(key) || 0, altasPorDia.get(key) || 0]);
+    shData.getRange(2, 1, fluxoValores.length, 3).setValues(fluxoValores);
+  }
 
-  // Especialidades (dedup)
   shData.getRange('E1:F1').setValues([['Especialidade','Qtd (dedup)']]).setFontWeight('bold');
-  shData.getRange('E2').setFormula("=FILTER('LISTAS DE APOIO'!U2:U;'LISTAS DE APOIO'!U2:U<>\"\")");
-  shData.getRange('F2').setFormula("=ARRAYFORMULA(IF(E2:E=\"\";;COUNTIFS(DadosÚnicos!U:U;E2:E)))");
+  const listaEspecialidades = getColumnValues_(shApoio, 'U2:U');
+  if (listaEspecialidades.length) {
+    const espTotais = listaEspecialidades.map(label => {
+      const count = dedupRows.reduce((acc, row) => acc + (equalsText_(row[COL.ESPECIALIDADE - 1], label) ? 1 : 0), 0);
+      return [label, count];
+    });
+    shData.getRange(2, 5, espTotais.length, 2).setValues(espTotais);
+  }
 
-  // Catálogo de CIDs (referência)
   shData.getRange('L1:N1').setValues([['Capítulo CID10 (catálogo)','Código (catálogo)','—']]).setFontWeight('bold');
-  shData.getRange('L2').setFormula("=FILTER('Cadastro CIDS'!B2:B;'Cadastro CIDS'!B2:B<>\"\")");
-  shData.getRange('M2').setFormula("=FILTER('Cadastro CIDS'!G2:G;'Cadastro CIDS'!G2:G<>\"\")");
+  const cidCatalog = [];
+  const cidMap = new Map();
+  const cidLast = shCIDS.getLastRow();
+  if (cidLast > 1) {
+    const capVals = shCIDS.getRange(2, 2, cidLast - 1, 1).getValues().flat();
+    const codVals = shCIDS.getRange(2, 7, cidLast - 1, 1).getValues().flat();
+    for (let i = 0; i < codVals.length; i++) {
+      const codigo = normalizeText_(codVals[i]);
+      const capitulo = (capVals[i] || '').toString().trim();
+      if (!codigo || !capitulo) continue;
+      cidCatalog.push([capitulo, codVals[i], '']);
+      cidMap.set(codigo, capitulo);
+      cidMap.set(codigo.replace('.', ''), capitulo);
+    }
+  }
+  if (cidCatalog.length) {
+    shData.getRange(2, 12, cidCatalog.length, 3).setValues(cidCatalog);
+  }
 
-  // Capítulos do CID-10 (via VLOOKUP+QUERY sobre dedup)
   shData.getRange('O1:P1').setValues([['Capítulo (uso)','Qtd (uso)']]).setFontWeight('bold');
-  shData.getRange('O2').setFormula(
-    "=QUERY(" +
-      "ARRAYFORMULA(" +
-        "IFNA(VLOOKUP(" +
-          "FILTER(DadosÚnicos!S2:S;DadosÚnicos!S2:S<>\"\");" +
-          "HSTACK('Cadastro CIDS'!G2:G;'Cadastro CIDS'!B2:B);" +
-          "2;FALSE" +
-        "))" +
-      ");" +
-      "\"select Col1,count(Col1) where Col1 is not null group by Col1 order by count(Col1) desc label count(Col1) ''\";" +
-      "0)"
-  );
+  const capCounts = new Map();
+  dedupRows.forEach(row => {
+    const raw = row[COL.CID - 1];
+    if (!raw) return;
+    const codigo = normalizeText_(raw).replace('.', '');
+    if (!codigo) return;
+    const capitulo = cidMap.get(codigo) || cidMap.get(codigo.slice(0, 3));
+    if (!capitulo) return;
+    capCounts.set(capitulo, (capCounts.get(capitulo) || 0) + 1);
+  });
+  const capEntries = Array.from(capCounts.entries()).sort((a, b) => b[1] - a[1]);
+  if (capEntries.length) {
+    shData.getRange(2, 15, capEntries.length, 2).setValues(capEntries);
+  }
 
   SpreadsheetApp.flush();
   Utilities.sleep(150);
   shData.hideSheet();
+
+  const totalInternacoes = filteredRows.length;
+  const totalPacientes = dedupRows.length;
+  const totalObitos = dedupRows.reduce(
+    (acc, row) => acc + (destinoPriority_(row[COL.DESTINO - 1]) === 0 ? 1 : 0),
+    0
+  );
+  const permanencias = dedupRows
+    .map(row => durationToDays_(row[COL.PERMANENCIA - 1]))
+    .filter(value => !isNaN(value));
+  const mediaPermanencia = average_(permanencias);
+  const somaPermanencia = permanencias.reduce((acc, value) => acc + value, 0);
+  const primeiraInternacao = dateMin(dedupRows, COL.DATA_ENTRADA);
+  const ultimaSaida = dateMax(dedupRows, COL.DATA_SAIDA);
+  const idadeValores = dedupRows
+    .map(row => toNumber_(row[COL.IDADE - 1]))
+    .filter(value => !isNaN(value));
+  const idadeMedia = average_(idadeValores);
+  const idadeMediana = median_(idadeValores);
+  const mediaPermanenciaValor = isNaN(mediaPermanencia) ? null : mediaPermanencia;
+  const somaPermanenciaValor = isNaN(somaPermanencia) ? 0 : somaPermanencia;
+  const idadeMediaValor = isNaN(idadeMedia) ? null : idadeMedia;
+  const idadeMedianaValor = isNaN(idadeMediana) ? null : idadeMediana;
+  const idadeAte19 = idadeValores.filter(v => v <= 19).length;
+  const idade20a59 = idadeValores.filter(v => v >= 20 && v <= 59).length;
+  const idade60Mais = idadeValores.filter(v => v >= 60).length;
+
+  const taxaObito = totalPacientes ? totalObitos / totalPacientes : 0;
 
   /* ===== 3) DASHBOARD ===== */
   const sh = safeRecreateSheet_(ss, 'Dashboard', shBase);
@@ -298,28 +533,36 @@ function criarDashboardEpidemiologico() {
       if (rows > 1) sh.getRange(rg.getRow()+1, rg.getColumn()+idx-1, rows-1, 1).setNumberFormat('0.0%');
     });
   }
-  function miniMuted(r, c, label, formulaOrValue, fmt) {
+  function miniMuted(r, c, label, value, fmt) {
     sh.getRange(r, c).setValue(label).setFontColor(COLOR.textMuted);
-    const cell = sh.getRange(r, c+1);
-    if (typeof formulaOrValue === 'string' && formulaOrValue.startsWith('=')) cell.setFormula(formulaOrValue);
-    else cell.setValue(formulaOrValue);
-    cell.setFontWeight('bold'); if (fmt) cell.setNumberFormat(fmt);
+    const cell = sh.getRange(r, c + 1);
+    if (value === null || value === undefined) cell.setValue('');
+    else cell.setValue(value);
+    cell.setFontWeight('bold');
+    if (fmt) cell.setNumberFormat(fmt);
   }
-  function kpiCard(r, c, title, formula, fmt, icon='') {
+  function kpiCard(r, c, title, value, fmt, icon='') {
     const titleR = sh.getRange(r, c, 1, 3).merge();
-    const valueR = sh.getRange(r+1, c, 1, 3).merge();
+    const valueR = sh.getRange(r + 1, c, 1, 3).merge();
     titleR.setValue(`${icon} ${title}`).setFontWeight('bold')
       .setBackground(COLOR.header).setFontColor('#0C3D3A')
       .setHorizontalAlignment('left').setVerticalAlignment('middle');
-    valueR.setFormula(formula).setFontSize(18).setFontWeight('bold')
+    if (value === null || value === undefined) valueR.setValue('');
+    else valueR.setValue(value);
+    valueR.setFontSize(18).setFontWeight('bold')
       .setBackground('#FFFFFF').setHorizontalAlignment('left').setVerticalAlignment('middle');
     if (fmt) valueR.setNumberFormat(fmt);
-    sh.getRange(r, c, 2, 3).setBorder(true,true,true,true,true,true);
+    sh.getRange(r, c, 2, 3).setBorder(true, true, true, true, true, true);
   }
   function linkTo(r, c, text, anchorCellA1) {
     const gid = sh.getSheetId();
-    sh.getRange(r, c).setFormula(`=HYPERLINK("#gid=${gid}&range=${anchorCellA1}"; "${text}")`)
-      .setFontColor(COLOR.primaryDark).setFontWeight('bold');
+    const rich = SpreadsheetApp.newRichTextValue()
+      .setText(text)
+      .setLinkUrl(`#gid=${gid}&range=${anchorCellA1}`)
+      .build();
+    sh.getRange(r, c).setRichTextValue(rich)
+      .setFontColor(COLOR.primaryDark)
+      .setFontWeight('bold');
   }
 
   let row = 1;
@@ -328,25 +571,23 @@ function criarDashboardEpidemiologico() {
   headerBlock(row, 1, '📊 Dashboard Epidemiológico – HUC'); row += 2;
 
   // Período + metadata
-  miniMuted(row, 1, 'Período selecionado',
-    "='PERFIL EPIDEMIOLÓGICO'!I1 & \" – \" & 'PERFIL EPIDEMIOLÓGICO'!J1 & \" / \" & 'PERFIL EPIDEMIOLÓGICO'!K1");
-  sh.getRange('B4').setFormula("='PERFIL EPIDEMIOLÓGICO'!I1 & \" – \" & 'PERFIL EPIDEMIOLÓGICO'!J1 & \" / \" & 'PERFIL EPIDEMIOLÓGICO'!K1");
+  miniMuted(row, 1, 'Período selecionado', periodoTexto);
   row++;
 
   /* KPI cards – linha 1 */
   const kpiRow1 = row;
-  kpiCard(kpiRow1, 1,  'Pacientes Únicos',            "=COUNTA(DadosÚnicos!C2:C)", '#,##0', '👤');
-  kpiCard(kpiRow1, 4,  'Total de Internações',        `=COUNTA('${filteredSheetName}'!C2:C)`, '#,##0', '🏥');
-  kpiCard(kpiRow1, 7,  'Taxa de Óbito',               "=IFERROR(COUNTIFS(DadosÚnicos!O:O;\"Óbito\")/COUNTA(DadosÚnicos!C2:C);0)", '0.0%', '☠️');
-  kpiCard(kpiRow1, 10, 'Média de Permanência (dias)', "=AVERAGE(DadosÚnicos!R:R)", '0.00', '⏱️');
+  kpiCard(kpiRow1, 1,  'Pacientes Únicos',            totalPacientes, '#,##0', '👤');
+  kpiCard(kpiRow1, 4,  'Total de Internações',        totalInternacoes, '#,##0', '🏥');
+  kpiCard(kpiRow1, 7,  'Taxa de Óbito',               taxaObito, '0.0%', '☠️');
+  kpiCard(kpiRow1, 10, 'Média de Permanência (dias)', mediaPermanenciaValor, '0.00', '⏱️');
   row = kpiRow1 + 3;
 
   /* KPI cards – linha 2 */
   const kpiRow2 = row;
-  kpiCard(kpiRow2, 1,  'Primeira Internação', "=MIN(DadosÚnicos!P:P)", 'dd/mm/yyyy', '📅');
-  kpiCard(kpiRow2, 4,  'Última Alta/Saída',   "=MAX(DadosÚnicos!Q:Q)", 'dd/mm/yyyy', '📅');
-  kpiCard(kpiRow2, 7,  'Idade Média',         "=AVERAGE(DadosÚnicos!F:F)", '0.0', '👶');
-  kpiCard(kpiRow2, 10, 'Dias-Paciente (soma)',"=SUM(DadosÚnicos!R:R)", '#,##0', '📈');
+  kpiCard(kpiRow2, 1,  'Primeira Internação', primeiraInternacao, 'dd/mm/yyyy', '📅');
+  kpiCard(kpiRow2, 4,  'Última Alta/Saída',   ultimaSaida, 'dd/mm/yyyy', '📅');
+  kpiCard(kpiRow2, 7,  'Idade Média',         idadeMediaValor, '0.0', '👶');
+  kpiCard(kpiRow2, 10, 'Dias-Paciente (soma)', somaPermanenciaValor, '#,##0', '📈');
   row = kpiRow2 + 4;
 
   /* Navegação rápida */
@@ -486,22 +727,23 @@ function criarDashboardEpidemiologico() {
   subHeader(rDemog, 1, 'Idade (faixas etárias)'); rDemog++;
   sh.getRange(rDemog,1,1,3).setValues([['Faixa','Qtd','%']]).setBackground(COLOR.header).setFontWeight('bold');
   const fStart = rDemog+1;
-  sh.getRange(fStart,1,3,1).setValues([['≤ 19 anos'],['20 a 59 anos'],['≥ 60 anos']]);
-  sh.getRange(fStart, 2, 3, 1).setFormulas([
-    ['=COUNTIFS(DadosÚnicos!F:F;"<=19")'],
-    ['=COUNTIFS(DadosÚnicos!F:F;">=20";DadosÚnicos!F:F;"<=59")'],
-    ['=COUNTIFS(DadosÚnicos!F:F;">=60")'],
-  ]);
+  const idadeFaixas = [
+    ['≤ 19 anos', idadeAte19],
+    ['20 a 59 anos', idade20a59],
+    ['≥ 60 anos', idade60Mais],
+  ];
+  const idadeTotal = idadeFaixas.reduce((acc, [, count]) => acc + count, 0);
+  const idadePerc = idadeFaixas.map(([, count]) => (idadeTotal ? count / idadeTotal : 0));
+  sh.getRange(fStart,1,3,1).setValues(idadeFaixas.map(row => [row[0]]));
+  sh.getRange(fStart,2,3,1).setValues(idadeFaixas.map(row => [row[1]]));
+  sh.getRange(fStart,3,3,1).setValues(idadePerc.map(value => [value]));
   const fTot = fStart+3;
-  sh.getRange(fTot,1,1,3).setValues([['TOTAL','','']]).setBackground(COLOR.header).setFontWeight('bold');
-  sh.getRange(fTot,2).setFormula(`=SUM(B${fStart}:B${fStart+2})`);
-  sh.getRange(fStart, 3, 3, 1)
-    .setFormulasR1C1(Array.from({ length: 3 }, () => [`=IFERROR(RC[-1]/R${fTot}C2;0)`]));
+  sh.getRange(fTot,1,1,3).setValues([['TOTAL', idadeTotal, '']]).setBackground(COLOR.header).setFontWeight('bold');
   bandTable(`A${rDemog}:C${fTot}`, [3]);
 
   rDemog = fTot + 2;
-  miniMuted(rDemog,1,'Idade média',   "=AVERAGE(DadosÚnicos!F:F)","0.0"); rDemog++;
-  miniMuted(rDemog,1,'Idade mediana', "=MEDIAN(DadosÚnicos!F:F)","0.0"); rDemog += 2;
+  miniMuted(rDemog,1,'Idade média',   idadeMediaValor,"0.0"); rDemog++;
+  miniMuted(rDemog,1,'Idade mediana', idadeMedianaValor,"0.0"); rDemog += 2;
 
   row = rDemog;
 
@@ -781,6 +1023,9 @@ function criarDashboardEpidemiologico() {
   sh.getRange(1,1,row,12).setHorizontalAlignment('left').setVerticalAlignment('middle');
   sh.getRange('A1:L1').setFontSize(14);
   sh.setFrozenRows(1);
+
+  SpreadsheetApp.flush();
+  sh.getRange(1, 1, row, 12).copyTo(sh.getRange(1, 1, row, 12), { contentsOnly: true });
 
   SpreadsheetApp.flush();
   Utilities.sleep(120);
