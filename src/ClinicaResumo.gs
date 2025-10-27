@@ -1,7 +1,7 @@
 /************************************************************
 📊 DASHBOARD EPIDEMIOLÓGICO – Luky + GPT-5 (V12.2.3 – Hotfix estabilidade + métricas únicas)
 • Funções em inglês nas fórmulas; separador de argumentos ";"
-• Deduplicação por Prontuário (C) usando a última Data Saída (Q)
+• Deduplicação por Prontuário (C) priorizando destino (Óbito > Residência/Outro Hospital > demais), permanência (R) e última Data Saída (Q)
 • Abas requeridas:
   - 'Base Filtrada (Fórmula)' (A:Y)
   - 'LISTAS DE APOIO' (valores únicos por coluna com mesmo cabeçalho)
@@ -188,6 +188,7 @@ function criarDashboardEpidemiologico() {
     `destinoRaw;INDEX(dados;;15);`,
     `destinoLimpo;IF(destinoRaw="";"";REGEXREPLACE(UPPER(TRIM(destinoRaw));"\\s+";" "));`,
     `saida;INDEX(dados;;17);`,
+    `permanencia;INDEX(dados;;18);`,
     `prioridade;` +
       `IF(` +
         `IF(destinoLimpo="";FALSE;REGEXMATCH(destinoLimpo;"ÓBITO"));1;` +
@@ -199,7 +200,7 @@ function criarDashboardEpidemiologico() {
         `)` +
       `);`,
     `ordem;SEQUENCE(linhas);`,
-    `ordenado;SORTBY(dados;pront;TRUE;prioridade;TRUE;saida;FALSE;ordem;TRUE);`,
+    `ordenado;SORTBY(dados;pront;TRUE;prioridade;TRUE;permanencia;FALSE;saida;FALSE;ordem;TRUE);`,
     `prontOrdenado;INDEX(ordenado;;3);`,
     `anterior;IF(linhas>1;TAKE(prontOrdenado;linhas-1);{});`,
     `primeira;IF(linhas=0;{};prontOrdenado<>VSTACK("";anterior));`,
